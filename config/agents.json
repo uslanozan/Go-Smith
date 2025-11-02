@@ -1,0 +1,28 @@
+[
+  {
+    "name": "slack_send_message",
+    "description": "Sends a new message to a specific Slack user or channel.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "channel_id": {"type": "string"},
+        "text":       {"type": "string"}
+      },
+      "required": ["channel_id", "text"]
+    },
+    "endpoint": "http://localhost:8081/send_message"
+  },
+  {
+    "name": "slack_read_messages",
+    "description": "Reads the last N messages from a specific Slack channel.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "channel_id": {"type": "string"},
+        "limit":      {"type": "integer", "minimum": 1, "default": 10}
+      },
+      "required": ["channel_id"]
+    },
+    "endpoint": "http://localhost:8081/read_messages"
+  }
+]
