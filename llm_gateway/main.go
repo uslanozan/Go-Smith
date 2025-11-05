@@ -18,10 +18,11 @@ type ToolSpec struct {
 
 // Ollama'ya göndereceğimiz /api/chat request'inin formatı
 type OllamaChatRequest struct {
-	Model    string          `json:"model"`
-	Messages []OllamaMessage `json:"messages"`
-	Tools    []OllamaTool    `json:"tools,omitempty"`
-	Stream   bool            `json:"stream"`
+	Model     string          `json:"model"`
+	Messages  []OllamaMessage `json:"messages"`
+	Tools     []OllamaTool    `json:"tools,omitempty"`
+	Stream    bool            `json:"stream"`
+	KeepAlive string          `json:"keep_alive,omitempty"` // TIMEOUT'u engellemek için
 }
 
 type OllamaMessage struct {
@@ -47,16 +48,16 @@ type OllamaChatResponse struct {
 }
 
 type OllamaResponseMessage struct {
-	Content   string           `json:"content"` // Normal metin cevabı
+	Content   string           `json:"content"`              // Normal metin cevabı
 	ToolCalls []OllamaToolCall `json:"tool_calls,omitempty"` // Araç çağırma isteği
 }
 
 // Ollama'nın araç çağırma formatı
 type OllamaToolCall struct {
 	Function struct {
-		Name      string `json:"name"`
+		Name string `json:"name"`
 		// ARTIK JSON.RawMessage KULLANIYORUZ, çÜNKÜ MODEL OBJE GÖNDERİYOR
-		Arguments json.RawMessage `json:"arguments"` 
+		Arguments json.RawMessage `json:"arguments"`
 	} `json:"function"`
 }
 
@@ -75,7 +76,7 @@ var httpClient = &http.Client{Timeout: 60 * time.Second}
 var ollamaURL = "http://localhost:11434/api/chat"
 var orchestratorToolsURL = "http://localhost:8080/tools"
 var orchestratorRunTaskURL = "http://localhost:8080/run_task"
-var ollamaModel = "llama3.1:8b-instruct-q8_0" // Veya tool-use destekleyen başka bir model
+var ollamaModel = "llama3.2:3b-instruct-q4_K_M" // Veya tool-use destekleyen başka bir model
 
 // --- 1. Adım: Orchestrator'dan Araç Listesini Al ---
 func getToolsFromOrchestrator() ([]ToolSpec, error) {
@@ -169,8 +170,9 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 			{Role: "system", Content: "You are a helpful assistant that can use tools."},
 			{Role: "user", Content: chatReq.Prompt},
 		},
-		Tools:  ollamaTools,
-		Stream: false,
+		Tools:     ollamaTools,
+		Stream:    false,
+		KeepAlive: "1h", // 1 saat alive
 	}
 
 	reqBody, _ := json.Marshal(ollamaReq)
@@ -190,11 +192,11 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. Ollama'nın Cevabını Değerlendir
-	
+
 	// EĞER TOOL CALL (ARAÇ ÇAĞIRMA) VARSA:
 	if ollamaResp.Message.ToolCalls != nil && len(ollamaResp.Message.ToolCalls) > 0 {
 		toolCall := ollamaResp.Message.ToolCalls[0] // Şimdilik sadece ilk tool call'u çalıştıralım
-		
+
 		// 5. Orchestrator'ı çağır
 		agentResult, err := callOrchestrator(toolCall)
 		if err != nil {
@@ -202,7 +204,7 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Agent çalıştırılamadı", http.StatusInternalServerError)
 			return
 		}
-		
+
 		// 6. Agent'ın sonucunu kullanıcıya dön
 		// (Normalde bu sonucu tekrar LLM'e gönderip özetletmek daha iyi olur,
 		// ama şimdilik direkt agent sonucunu dönelim)
