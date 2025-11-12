@@ -15,9 +15,9 @@ func main() {
 	}
 
 	// 3. Orchestrator'ı (dağıtıcıyı) oluştur
-	orchestrator := NewOrchestrator(registry) // Bu kod değişmedi
+	orchestrator := NewOrchestrator(registry)
 
-	// 4. HTTP sunucu ayarları (Routing) (Bu kod değişmedi)
+	// 4. HTTP sunucu ayarları
 	mux := http.NewServeMux()
 	mux.HandleFunc("/tools", orchestrator.HandleGetTools)
 	mux.HandleFunc("/run_task", orchestrator.HandleTask)

@@ -1,3 +1,4 @@
+// Server Side
 package main
 
 import (
@@ -7,34 +8,27 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/uslanozan/Ollama-the-Agent/models"
 )
 
-// TaskRequest, LLM'den Orchestrator'a gelecek olan JSON isteğinin formatıdır.
-type TaskRequest struct {
-	AgentName string `json:"agent_name"`
-	// Argümanları ham JSON (RawMessage) olarak alıyoruz,
-	// böylece değiştirmeden doğrudan agent'a iletebiliriz.
-	Arguments json.RawMessage `json:"arguments"`
-}
-
-// Orchestrator, ana sunucu yapımız.
-// Agent kayıt defterini ve diğer servislere istek atmak için bir HTTP client'ı tutar.
+// Orchestrator registry ve diğer servislere istek atmak için bir HTTP client'ı tutar.
 type Orchestrator struct {
 	Registry   *AgentRegistry
 	HttpClient *http.Client
 }
 
+// Constructor
 func NewOrchestrator(registry *AgentRegistry) *Orchestrator {
 	return &Orchestrator{
 		Registry: registry,
 		HttpClient: &http.Client{
-			Timeout: 10 * time.Second, // Agent'lara istek atarken zaman aşımı
+			Timeout: 10 * time.Second, // Agent'lara istek atarken timeout
 		},
 	}
 }
 
-// HandleTask, bizim ana dağıtıcı (dispatch) handler'ımız.
-// LLM'den gelen "/run_task" gibi bir isteği bu fonksiyon karşılar.
+// LLM'den gelen task'i agent'lara yönlendirir
 func (o *Orchestrator) HandleTask(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
@@ -42,7 +36,7 @@ func (o *Orchestrator) HandleTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. LLM'den gelen JSON isteğini parse et
-	var task TaskRequest
+	var task models.OrchestratorTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -59,7 +53,6 @@ func (o *Orchestrator) HandleTask(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Görev alındı: Agent '%s', Endpoint: '%s'", agent.Name, agent.Endpoint)
 
 	// 3. Görevi (argümanları) ilgili agent'a PUSH et
-	// Argümanları (task.Arguments) bir buffer'a koyup POST isteği olarak gönderiyoruz.
 	agentReq, err := http.NewRequest("POST", agent.Endpoint, bytes.NewBuffer(task.Arguments))
 	if err != nil {
 		log.Printf("Hata: Agent isteği oluşturulamadı: %v", err)
@@ -79,14 +72,13 @@ func (o *Orchestrator) HandleTask(w http.ResponseWriter, r *http.Request) {
 	defer agentResp.Body.Close()
 
 	// 5. Agent'ın cevabını (başarılı veya hatalı) doğrudan bizi çağıran servise (LLM'e) geri yolla.
-	// Bu, Orchestrator'ı bir "proxy" (vekil) gibi davranmasını sağlar.
 	log.Printf("Agent '%s' yanıt verdi: %s", agent.Name, agentResp.Status)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(agentResp.StatusCode)
 	io.Copy(w, agentResp.Body)
 }
 
-// HandleGetTools, LLM'e "hangi araçların var?" diye sorması için bir endpoint sağlar.
+// GetToolsSpec'i çağırır ve LLM'in araçları görmesini sağlar
 func (o *Orchestrator) HandleGetTools(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "Only GET method is allowed", http.StatusMethodNotAllowed)

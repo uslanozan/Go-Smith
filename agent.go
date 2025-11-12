@@ -5,66 +5,53 @@ import (
 	"log"
 	"os"
 	"sync"
+
+	"github.com/uslanozan/Ollama-the-Agent/models"
 )
 
-// AgentDefinition, config/agents.json dosyas�ndaki her bir objeye kar��l�k gelir.
-type AgentDefinition struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Schema      json.RawMessage `json:"schema"`
-	Endpoint    string          `json:"endpoint"` // Art�k JSON'dan okunuyor
-}
-
-// AgentRegistry (hi� de�i�medi)
+// Tüm agent'ları tutan ve yöneten merkezi registry
 type AgentRegistry struct {
 	mu     sync.RWMutex
-	agents map[string]AgentDefinition
+	agents map[string]models.AgentDefinition
 }
 
-// NewAgentRegistry (hi� de�i�medi)
+// Yeni bir kayıt defteri registry oluşturur ve başlatır
 func NewAgentRegistry() *AgentRegistry {
 	return &AgentRegistry{
-		agents: make(map[string]AgentDefinition),
+		agents: make(map[string]models.AgentDefinition),
 	}
 }
 
-// Register (hi� de�i�medi)
-func (r *AgentRegistry) Register(def AgentDefinition) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.agents[def.Name] = def
-}
-
-// Get (hi� de�i�medi)
-func (r *AgentRegistry) Get(name string) (AgentDefinition, bool) {
+// Defterden agent'ın ismine göre arar, bulursa definition'ı döndürür
+func (r *AgentRegistry) Get(name string) (models.AgentDefinition, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	agent, ok := r.agents[name]
 	return agent, ok
 }
 
-// GetToolsSpec (Endpoint bilgisini gizleyecek �ekilde g�ncellendi)
-func (r *AgentRegistry) GetToolsSpec() []map[string]interface{} {
+
+// Endpointi gizleyerek LLM'e agent listesini bildirir
+// any = interface{} (tipini bilmediğimiz zamanlar)
+func (r *AgentRegistry) GetToolsSpec() []map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// LLM'e sadece name, description ve schema'y� g�ndeririz.
-	// Endpoint bir i� uygulama detay�d�r.
-	specs := make([]map[string]interface{}, 0, len(r.agents))
+	specs := make([]map[string]any, 0, len(r.agents))
 	for _, agent := range r.agents {
-		specs = append(specs, map[string]interface{}{
-			"name":        agent.Name,
-			"description": agent.Description,
-			"schema":      agent.Schema,
+		specs = append(specs, map[string]any{
+			"name":        agent.Name,  // String
+			"description": agent.Description,  // String
+			"schema":      agent.Schema,  // json.RawMessage
 		})
 	}
 	return specs
 }
 
-// YEN� FONKS�YON: LoadAgentsFromConfig
-// config/agents.json dosyas�n� okur ve t�m agent'lar� registry'ye kaydeder.
+
+// Orchestrator ilk başladığında config/agents.json'ı okuyarak agent'ları deftere otomatik kaydeder
 func LoadAgentsFromConfig(registry *AgentRegistry, configFile string) error {
-	log.Printf("Agent konfig�rasyonu y�kleniyor: %s", configFile)
+	log.Printf("Agent konfigrasyonu yükleniyor: %s", configFile)
 
 	file, err := os.Open(configFile)
 	if err != nil {
@@ -72,17 +59,26 @@ func LoadAgentsFromConfig(registry *AgentRegistry, configFile string) error {
 	}
 	defer file.Close()
 
-	var definitions []AgentDefinition
+	var definitions []models.AgentDefinition
 	if err := json.NewDecoder(file).Decode(&definitions); err != nil {
 		return err
 	}
 
 	count := 0
 	for _, def := range definitions {
-		registry.Register(def)
+		registry.register(def)
 		count++
 	}
 
-	log.Printf("%d agent eylemi ba�ar�yla y�klendi.", count)
+	log.Printf("%d agent eylemi başarıyla yüklendi.", count)
 	return nil
+}
+
+// ---------------------- HELPER ----------------------
+
+// Deftere yeni register kaydeder
+func (r *AgentRegistry) register(def models.AgentDefinition) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.agents[def.Name] = def
 }
