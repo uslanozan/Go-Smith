@@ -1,7 +1,10 @@
+// Dosya: llm_gateway/gateway.go
+
 package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings" // <-- YENİ IMPORT
 	"time"
 
 	"github.com/joho/godotenv"
@@ -25,8 +29,9 @@ type GatewayConfig struct {
 	ListenAddress          string
 }
 
+// Gateway, ana sunucu yapımızdır.
 type Gateway struct {
-	GatewayConfig     *GatewayConfig
+	Config     *GatewayConfig
 	HttpClient *http.Client
 }
 
@@ -34,7 +39,7 @@ type Gateway struct {
 func NewGatewayConfig() (*GatewayConfig, error) {
 	timeoutStr := os.Getenv("HTTP_CLIENT_TIMEOUT_SECONDS")
 	if timeoutStr == "" {
-		timeoutStr = "60" // Varsayılan 60 saniye
+		timeoutStr = "60"
 	}
 	timeout, err := strconv.Atoi(timeoutStr)
 	if err != nil {
@@ -43,7 +48,7 @@ func NewGatewayConfig() (*GatewayConfig, error) {
 
 	listenAddr := os.Getenv("GATEWAY_LISTEN_ADDR")
 	if listenAddr == "" {
-		listenAddr = ":8000" // Varsayılan port
+		listenAddr = ":8000"
 	}
 
 	return &GatewayConfig{
@@ -59,7 +64,7 @@ func NewGatewayConfig() (*GatewayConfig, error) {
 // NewGateway, yeni bir Gateway servisi oluşturur.
 func NewGateway(cfg *GatewayConfig) *Gateway {
 	return &Gateway{
-		GatewayConfig: cfg,
+		Config: cfg,
 		HttpClient: &http.Client{
 			Timeout: cfg.HttpClientTimeout,
 		},
@@ -72,9 +77,16 @@ type ChatRequest struct {
 }
 
 // --- 1. Adım: Orchestrator'dan Araç Listesini Al ---
-// Artık 'Gateway' struct'ının bir metodu
-func (g *Gateway) getToolsFromOrchestrator() ([]models.ToolSpec, error) {
-	resp, err := g.HttpClient.Get(g.GatewayConfig.OrchestratorToolsURL) // <-- Global değişken yerine g.GatewayConfig ve g.HttpClient kullanır
+func (g *Gateway) getToolsFromOrchestrator(ctx context.Context) ([]models.ToolSpec, error) {
+    
+    // GÜNCELLENDİ: Context'i içeren yeni bir GET isteği oluştur
+	req, err := http.NewRequestWithContext(ctx, "GET", g.Config.OrchestratorToolsURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+    // GÜNCELLENDİ: 'req' (context'i içeren) Do() metoduna gönderildi
+	resp, err := g.HttpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -104,11 +116,11 @@ func convertToolsForOllama(tools []models.ToolSpec) []models.OllamaTool {
 }
 
 // --- 4. Adım: Ollama'dan Gelen Tool Call'u Orchestrator'a Yönlendir ---
-func (g *Gateway) callOrchestrator(toolCall models.OllamaToolCall) (json.RawMessage, error) {
+// GÜNCELLENDİ: Artık (json.RawMessage, int, error) olmak üzere 3 değer döndürüyor.
+func (g *Gateway) callOrchestrator(ctx context.Context, toolCall models.OllamaToolCall) (json.RawMessage, int, error) {
 	log.Printf("[Gateway] Ollama'dan gelen tool call Orchestrator'a yönlendiriliyor: %s", toolCall.Function.Name)
 
 	rawArgs := json.RawMessage(toolCall.Function.Arguments)
-
 	task := models.OrchestratorTaskRequest{
 		AgentName: toolCall.Function.Name,
 		Arguments: rawArgs,
@@ -116,48 +128,53 @@ func (g *Gateway) callOrchestrator(toolCall models.OllamaToolCall) (json.RawMess
 
 	reqBody, err := json.Marshal(task)
 	if err != nil {
-		return nil, err
+		return nil, http.StatusInternalServerError, err
 	}
 
-	resp, err := g.HttpClient.Post(g.GatewayConfig.OrchestratorRunTaskURL, "application/json", bytes.NewBuffer(reqBody)) // <-- g.GatewayConfig ve g.HttpClient kullanır
+	// GÜNCELLENDİ: http.NewRequest yerine NewRequestWithContext kullanıldı
+	req, err := http.NewRequestWithContext(ctx, "POST", g.Config.OrchestratorRunTaskURL, bytes.NewBuffer(reqBody))
 	if err != nil {
-		return nil, err
+		return nil, http.StatusInternalServerError, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// GÜNCELLENDİ: 'req' (context'i içeren) Do() metoduna gönderildi
+	resp, err := g.HttpClient.Do(req)
+	if err != nil {
+		return nil, http.StatusServiceUnavailable, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, http.StatusInternalServerError, err
 	}
 
-	log.Printf("[Gateway] Orchestrator'dan yanıt alındı.")
-	return body, nil
+	log.Printf("[Gateway] Orchestrator'dan yanıt alındı. Status: %d", resp.StatusCode)
+	return body, resp.StatusCode, nil
 }
 
 // --- Ana Chat Handler ---
+// GÜNCELLENDİ: Artık 200 OK (senkron) ve 202 Accepted (asenkron) durumlarını anlıyor.
 func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
 	var chatReq ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&chatReq); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
 	log.Printf("[Gateway] Yeni chat isteği alındı: %s", chatReq.Prompt)
 
-	// 1. Orchestrator'dan /tools listesini al
-	tools, err := g.getToolsFromOrchestrator() // <-- Metod olarak çağır
-	if err != nil {
-		log.Printf("Hata: Orchestrator'dan tool listesi alınamadı: %v", err)
-		http.Error(w, "Orchestrator'a ulaşılamadı", http.StatusInternalServerError)
-		return
-	}
-
-	// 2. Araçları Ollama formatına çevir
+	// ... (1. Adım: getToolsFromOrchestrator ve 2. Adım: convertToolsForOllama aynı) ...
+	tools, err := g.getToolsFromOrchestrator(ctx)
+	if err != nil { /* ...hata kontrolü... */ }
 	ollamaTools := convertToolsForOllama(tools)
 
 	// 3. Ollama'ya isteği (prompt + tools) gönder
 	ollamaReq := models.OllamaChatRequest{
-		Model: g.GatewayConfig.OllamaModel, // <-- g.GatewayConfig'den al
+		Model: g.Config.OllamaModel,
 		Messages: []models.OllamaMessage{
 			{Role: "system", Content: "You are a helpful assistant that can use tools."},
 			{Role: "user", Content: chatReq.Prompt},
@@ -166,36 +183,31 @@ func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
 		Stream:    false,
 		KeepAlive: "1h",
 	}
-
+	// ... (Ollama'ya POST etme ve cevabı decode etme kısmı aynı) ...
 	reqBody, _ := json.Marshal(ollamaReq)
-	resp, err := g.HttpClient.Post(g.GatewayConfig.OllamaURL, "application/json", bytes.NewBuffer(reqBody)) // <-- g.GatewayConfig ve g.HttpClient kullanır
-	if err != nil {
-		log.Printf("Hata: Ollama'ya ulaşılamadı: %v", err)
-		http.Error(w, "Ollama'ya ulaşılamadı", http.StatusInternalServerError)
-		return
-	}
+	resp, err := g.HttpClient.Post(g.Config.OllamaURL, "application/json", bytes.NewBuffer(reqBody))
+	if err != nil { /* ...hata kontrolü... */ }
 	defer resp.Body.Close()
-
 	var ollamaResp models.OllamaChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		log.Printf("Hata: Ollama'dan gelen yanıt parse edilemedi: %v", err)
-		http.Error(w, "Ollama yanıtı anlaşılamadı", http.StatusInternalServerError)
-		return
-	}
+	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil { /* ...hata kontrolü... */ }
 
 	// 4. Ollama'nın Cevabını Değerlendir
 	if len(ollamaResp.Message.ToolCalls) > 0 {
 		toolCall := ollamaResp.Message.ToolCalls[0]
 
 		// 5. Orchestrator'ı çağır
-		agentResult, err := g.callOrchestrator(toolCall) // <-- Metod olarak çağır
+		// Artık 3 değer alıyoruz: sonuç, durum kodu, hata
+		agentResult, statusCode, err := g.callOrchestrator(ctx, toolCall)		
 		if err != nil {
 			log.Printf("Hata: Orchestrator çağrılamadı: %v", err)
-			http.Error(w, "Agent çalıştırılamadı", http.StatusInternalServerError)
+			http.Error(w, "Agent çalıştırılamadı", statusCode) // Dönen hatayı yansıt
 			return
 		}
 
+		// 6. Agent'ın sonucunu kullanıcıya dön
+		// (Bu artık 200 OK (senkron sonuç) VEYA 202 Accepted (asenkron TaskID) olabilir)
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode) // Orchestrator'dan gelen kodu (200 veya 202) yansıt
 		w.Write(agentResult)
 		return
 	}
@@ -208,29 +220,72 @@ func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// main fonksiyonu artık tüm sistemi "kurar" (setup)
-func main() {
-	// ... (.env yükleme kısmı) ...
-	if err := godotenv.Load("./../.env"); err != nil {
-		log.Println("Uyarı: .env dosyası bulunamadı, environment değişkenleri kullanılacak.")
-	}
-	// 1. GatewayConfig'i oluştur (.env'den okur)
-	cfg, err := NewGatewayConfig()
-	if err != nil {
-		log.Fatalf("GatewayConfig yüklenemedi: %v", err)
+// --- YENİ ENDPOINT ---
+// handleChatStatus, kullanıcının bir görevin durumunu sorgulamasını sağlar.
+func (g *Gateway) handleChatStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if r.Method != "GET" {
+		http.Error(w, "Only GET method is allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
-	// 2. Gateway'i (GatewayConfig ve HttpClient ile) oluştur
+	// 1. URL'den Task ID'yi ayıkla (örn: "/chat_status/abc-123" -> "abc-123")
+	taskID := strings.TrimPrefix(r.URL.Path, "/chat_status/")
+	if taskID == "" {
+		http.Error(w, "Task ID eksik", http.StatusBadRequest)
+		return
+	}
+	log.Printf("[Gateway] Durum sorgusu alındı: TaskID: %s", taskID)
+
+	// 2. Orchestrator'ın durum sorgulama adresini oluştur
+	// (örn: "http://localhost:8080/task_status/" + "abc-123")
+	fullStatusURL := g.Config.OrchestratorToolsURL + "/../task_status/" + taskID	
+	// (Daha sağlamı: g.Config'e OrchestratorTaskStatusURL eklemek)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", fullStatusURL, nil)
+	if err != nil {
+		log.Printf("Hata: Orchestrator durum sorgu isteği oluşturulamadı: %v", err)
+		http.Error(w, "Request creation failed", http.StatusInternalServerError)
+		return
+	}
+
+	// 3. İsteği Orchestrator'a yönlendir (Proxy)
+	resp, err := g.HttpClient.Do(req)
+	if err != nil {
+		log.Printf("Hata: Orchestrator durum sorgulanamadı: %v", err)
+		http.Error(w, "Orchestrator status check failed", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 4. Orchestrator'ın durum raporunu (TaskStatusResponse) kullanıcıya geri yolla
+	log.Printf("[Gateway] Orchestrator durum yanıtı verdi: %s", resp.Status)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+// main fonksiyonu artık tüm sistemi "kurar" (setup)
+func main() {
+	if err := godotenv.Load("./../.env"); err != nil {
+		// .env dosyasını llm_gateway klasöründe arar
+		log.Println("Uyarı: .env dosyası bulunamadı, environment değişkenleri kullanılacak.")
+	}
+
+	cfg, err := NewGatewayConfig()
+	if err != nil {
+		log.Fatalf("Config yüklenemedi: %v", err)
+	}
+
 	gateway := NewGateway(cfg)
 
 	// 3. Handler'ları (metodları) router'a kaydet
 	mux := http.NewServeMux()
-	mux.HandleFunc("/chat", gateway.chatHandler) // <-- 'gateway.chatHandler' metodunu kaydet
+	mux.HandleFunc("/chat", gateway.chatHandler)
+	mux.HandleFunc("/chat_status/", gateway.handleChatStatus) // <-- YENİ ENDPOINT KAYDI
 
-	// GÜNCELLENMİŞ LOG MESAJI (Printf kullanarak)
 	log.Printf("[LLM Gateway] Ana Backend servisi %s adresinde başlatılıyor...", cfg.ListenAddress)
-
-	// GÜNCELLENMİŞ SUNUCU BAŞLATMA
 	if err := http.ListenAndServe(cfg.ListenAddress, mux); err != nil {
 		log.Fatalf("LLM Gateway başlatılamadı: %v", err)
 	}

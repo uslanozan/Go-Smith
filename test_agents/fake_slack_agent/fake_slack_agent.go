@@ -1,3 +1,6 @@
+// Senkron agent örneği.
+// Mesela hava durumu, stok takibi, saat sorgusu gibi gibi..
+
 package main
 
 import (

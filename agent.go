@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 	"sync"
-
+	"net/url"
 	"github.com/uslanozan/Ollama-the-Agent/models"
 )
 
@@ -13,6 +13,56 @@ import (
 type AgentRegistry struct {
 	mu     sync.RWMutex
 	agents map[string]models.AgentDefinition
+}
+
+type TaskRegistry struct {
+	mu    sync.RWMutex
+	tasks map[string]TaskInfo // Key: TaskID
+}
+
+// TaskInfo, bir görevin hangi agent'a ait olduğunu ve
+// durum sorgulama adresini saklar.
+type TaskInfo struct {
+	AgentName          string
+	AgentStatusBaseURL string // Örn: "http://localhost:8082/task_status/"
+}
+
+// NewTaskRegistry, yeni, boş bir görev defteri oluşturur.
+func NewTaskRegistry() *TaskRegistry {
+	return &TaskRegistry{
+		tasks: make(map[string]TaskInfo),
+	}
+}
+
+// RegisterTask, yeni başlatılan bir asenkron görevi deftere kaydeder.
+func (r *TaskRegistry) RegisterTask(taskID string, agent models.AgentDefinition) error {
+	// Agent'ın ana "Endpoint" URL'sinden (http://.../create_event)
+	// temel URL'sini (http://localhost:8082) çıkarmalıyız.
+	base, err := url.Parse(agent.Endpoint)
+	if err != nil {
+		return err
+	}
+	// Yeni URL'yi oluştur: "http://localhost:8082" + "/task_status/"
+	statusURL := base.ResolveReference(&url.URL{Path: agent.StatusEndpointPath})
+
+	info := TaskInfo{
+		AgentName:          agent.Name,
+		AgentStatusBaseURL: statusURL.String(),
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tasks[taskID] = info
+	log.Printf("Görev deftere kaydedildi: TaskID %s -> Agent %s", taskID, info.AgentName)
+	return nil
+}
+
+// GetTaskInfo, bir Task ID'ye karşılık gelen görev bilgilerini (sorgu URL'si) getirir.
+func (r *TaskRegistry) GetTaskInfo(taskID string) (TaskInfo, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	info, ok := r.tasks[taskID]
+	return info, ok
 }
 
 // Yeni bir kayıt defteri registry oluşturur ve başlatır

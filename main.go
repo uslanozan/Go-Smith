@@ -14,13 +14,16 @@ func main() {
 		log.Fatalf("Agent konfigürasyonu yüklenemedi: %v", err)
 	}
 
+	taskRegistry := NewTaskRegistry()
+
 	// 3. Orchestrator'ı (dağıtıcıyı) oluştur
-	orchestrator := NewOrchestrator(registry)
+	orchestrator := NewOrchestrator(registry, taskRegistry)
 
 	// 4. HTTP sunucu ayarları
 	mux := http.NewServeMux()
 	mux.HandleFunc("/tools", orchestrator.HandleGetTools)
 	mux.HandleFunc("/run_task", orchestrator.HandleTask)
+	mux.HandleFunc("/task_status/", orchestrator.HandleTaskStatus)
 
 	log.Println("Go Orchestrator sunucusu http://localhost:8080 adresinde başlatılıyor...")
 

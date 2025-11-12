@@ -6,122 +6,193 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 
+	"github.com/google/uuid"
+	"github.com/joho/godotenv"
+	"github.com/uslanozan/Ollama-the-Agent/models" // <-- Artık 'models' import ediliyor
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"
-	"github.com/joho/godotenv"
 )
 
-// calendarSrv, tüm handler'lar tarafından erişilebilen global bir değişken olacak.
-var calSrv *calendar.Service
-
-// Orchestrator'dan gelen "arguments" JSON'una karşılık gelen struct
 type CreateEventArgs struct {
-	Summary     string `json:"summary"`
-	//kafa karıştırıyor Description string `json:"description"`
-	StartTime   string `json:"start_time"` // LLM'in RFC3339 formatında (string) göndereceğini varsayıyoruz
-	EndTime     string `json:"end_time"`   // Örn: "2025-11-06T14:00:00+03:00"
+	Summary   string `json:"summary"`
+	StartTime string `json:"start_time"`
+	EndTime   string `json:"end_time"`
 }
 
-// initCalendarService, sunucu başlarken Google API'a bağlanır.
-func initCalendarService() {
+// CalendarAgent, bu servisin "beynidir".
+type CalendarAgent struct {
+	calSrv *calendar.Service
+	
+	// Agent'ın "görev defteri" (in-memory veritabanı)
+	tasksMu sync.RWMutex
+	tasks   map[string]models.TaskStatusResponse
+}
+
+// initCalendarService, Google API'a bağlanır.
+func initCalendarService() *calendar.Service {
 	ctx := context.Background()
 
-	// 1. Credentials dosyasını oku
-	// (Dosya yolunun, bu Go dosyasının çalıştığı yere göre doğru olduğundan emin ol)
+	// Sizin .env yolunuzu koruyoruz
+	if err := godotenv.Load("../../.env"); err != nil {
+		log.Println("Uyarı: .env dosyası bulunamadı.")
+	}
+	
+	// Sizin secrets yolunuzu koruyoruz
 	b, err := os.ReadFile("../../secrets/calendar_api.json")
 	if err != nil {
 		log.Fatalf("Kimlik bilgisi dosyası okunamadı: %v", err)
 	}
 
-	// 2. Google JWT yapılandırmasını ayarla
 	config, err := google.JWTConfigFromJSON(b, calendar.CalendarScope)
 	if err != nil {
 		log.Fatalf("JWT yapılandırması oluşturulamadı: %v", err)
 	}
-
-	// 3. HTTP client'ı oluştur
 	client := config.Client(ctx)
-
-	// 4. Calendar servisini başlat ve global değişkene ata
 	srv, err := calendar.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
 		log.Fatalf("Calendar servisi başlatılamadı: %v", err)
 	}
 	
-	calSrv = srv // Global değişkene atıyoruz
 	log.Println("Google Calendar servisi başarıyla bağlandı.")
+	return srv
 }
 
-// handleCreateEvent, /create_event endpoint'ine gelen istekleri karşılar
-func handleCreateEvent(w http.ResponseWriter, r *http.Request) {
-	log.Println("[Calendar Agent] /create_event çağrıldı.")
-
-	// 1. Orchestrator'dan gelen JSON argümanlarını oku
-	var args CreateEventArgs
-	if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
-		log.Printf("Hata: Geçersiz JSON formatı: %v", err)
-		http.Error(w, "Geçersiz JSON formatı", http.StatusBadRequest)
-		return
-	}
-	
-	// 2. LLM'den gelen bilgilere göre Event objesi oluştur
-	event := &calendar.Event{
-		Summary:     args.Summary,
-		Start: &calendar.EventDateTime{
-			DateTime: args.StartTime, // LLM'den gelen RFC3339 string'i
-			TimeZone: "Europe/Istanbul", // Veya Timezone'u da argüman olarak alabilirsiniz
-		},
-		End: &calendar.EventDateTime{
-			DateTime: args.EndTime, // LLM'den gelen RFC3339 string'i
-			TimeZone: "Europe/Istanbul",
-		},
-	}
-
-	// 3. Etkinliği takvime ekle
-	calendarId := os.Getenv("GMAIL_ADDRESS")
-    if calendarId == "" {
-    	log.Println("UYARI: GMAIL_ADDRESS .env dosyasında ayarlanmamış. 'primary' kullanılacak.")
-    	calendarId = "primary"
-    }
-	createdEvent, err := calSrv.Events.Insert(calendarId, event).Do()
-	if err != nil {
-		log.Printf("Hata: Etkinlik oluşturulamadı: %v", err)
-		http.Error(w, "Etkinlik oluşturulamadı", http.StatusInternalServerError)
-		return
-	}
-
-	log.Printf("İşlem BAŞARILI: Etkinlik oluşturuldu: %s", createdEvent.HtmlLink)
-
-	// 4. Orchestrator'a başarılı cevabı dön
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":           true,
-		"status":       "etkinlik oluşturuldu",
-		"summary":      createdEvent.Summary,
-		"htmlLink":     createdEvent.HtmlLink,
-	})
-}
-
-// main fonksiyonu artık sadece HTTP sunucusunu başlatır
+// main fonksiyonu agent'ı "kurar" (setup)
 func main() {
-	err := godotenv.Load("../../.env")
-	if err != nil {
-		log.Println("Uyarı: .env dosyası bulunamadı.")
+	calendarService := initCalendarService()
+
+	agent := &CalendarAgent{
+		calSrv: calendarService,
+		tasks:   make(map[string]models.TaskStatusResponse),
 	}
 
-	// Önce Google Calendar'a bağlan
-	initCalendarService()
-
-	// config/agents.json dosyamızdaki endpoint'i burada tanımlıyoruz
 	mux := http.NewServeMux()
-	mux.HandleFunc("/create_event", handleCreateEvent)
+	mux.HandleFunc("/create_event", agent.handleCreateEvent)
+	mux.HandleFunc("/task_status/", agent.handleTaskStatus) // <-- YENİ ENDPOINT
 
-	// Agent'ı 8082 portunda başlat
-	log.Println("[Calendar Agent] Google Calendar agent servisi http://localhost:8082 adresinde başlatılıyor...")
+	log.Println("[Calendar Agent] Asenkron Google Calendar agent servisi http://localhost:8082 adresinde başlatılıyor...")
 	if err := http.ListenAndServe(":8082", mux); err != nil {
 		log.Fatalf("Calendar agent başlatılamadı: %v", err)
 	}
+}
+
+// handleCreateEvent (GÖREVİ BAŞLATIR)
+func (a *CalendarAgent) handleCreateEvent(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	log.Println("[Calendar Agent] /create_event (async) çağrıldı.")
+
+	// 1. Argümanları oku (artık 'models' paketinden geliyor)
+	var args CreateEventArgs // <-- GÜNCELLENDİ
+	if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
+		http.Error(w, "Geçersiz JSON formatı", http.StatusBadRequest)
+		return
+	}
+
+	// 2. Yeni bir benzersiz Task ID oluştur
+	taskID := uuid.NewString()
+
+	// 3. Görevin ilk durumunu (pending) oluştur
+	taskStatus := models.TaskStatusResponse{
+		TaskID: taskID,
+		Status: models.StatusPending,
+	}
+
+	// 4. Görevi "görev defterine" (map) kaydet
+	a.tasksMu.Lock()
+	a.tasks[taskID] = taskStatus
+	a.tasksMu.Unlock()
+
+	// 5. ASIL İŞİ ARKA PLANDA (goroutine) BAŞLAT
+	go a.runCalendarTask(ctx, taskID, args)
+
+	// 6. KULLANICIYA ANINDA CEVAP DÖN (Sipariş Fişi)
+	log.Printf("Görev alındı, Task ID: %s", taskID)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted) // 202 "Kabul Edildi"
+	json.NewEncoder(w).Encode(models.TaskStartResponse{
+		TaskID: taskID,
+		Status: models.StatusPending,
+	})
+}
+
+// runCalendarTask (İŞİ ARKA PLANDA YAPAN GOROUTINE)
+func (a *CalendarAgent) runCalendarTask(ctx context.Context, taskID string, args CreateEventArgs) { // <-- GÜNCELLENDİ
+	// 1. Görevin durumunu "running" olarak güncelle
+	a.tasksMu.Lock()
+	a.tasks[taskID] = models.TaskStatusResponse{TaskID: taskID, Status: models.StatusRunning}
+	a.tasksMu.Unlock()
+	log.Printf("Task %s: Durum 'running' olarak güncellendi.", taskID)
+
+	// 2. GERÇEK İŞİ YAP (Google API'ı çağırma)
+	event := &calendar.Event{
+		Summary: args.Summary,
+		Start:   &calendar.EventDateTime{DateTime: args.StartTime, TimeZone: "Europe/Istanbul"},
+		End:     &calendar.EventDateTime{DateTime: args.EndTime, TimeZone: "Europe/Istanbul"},
+	}
+	
+	// Sizin .env okuma mantığınızı koruyoruz
+	calendarId := os.Getenv("GMAIL_ADDRESS")
+	if calendarId == "" { calendarId = "primary" }
+
+	createdEvent, err := a.calSrv.Events.Insert(calendarId, event).Context(ctx).Do()
+
+	// 3. İŞ BİTTİĞİNDE SONUCU GÜNCELLE
+	a.tasksMu.Lock()
+	defer a.tasksMu.Unlock()
+
+	if err != nil {
+		if err == context.Canceled || err == context.DeadlineExceeded {
+			// İptal durumu
+			log.Printf("Task %s: Durum 'failed' olarak güncellendi. SEBEP: İSTEK İPTAL EDİLDİ.", taskID)
+			a.tasks[taskID] = models.TaskStatusResponse{
+				TaskID: taskID,
+				Status: models.StatusFailed,
+				Error:  "Task canceled by user request.",
+			}
+		} else {
+			// Normal hata durumu
+			log.Printf("Task %s: Durum 'failed' olarak güncellendi. Hata: %v", taskID, err)
+			a.tasks[taskID] = models.TaskStatusResponse{
+				TaskID: taskID,
+				Status: models.StatusFailed,
+				Error:  err.Error(),
+			}
+		}
+	} else {
+		// Başarı durumu
+		log.Printf("Task %s: Durum 'completed' olarak güncellendi. Link: %s", taskID, createdEvent.HtmlLink)
+		resultData, _ := json.Marshal(map[string]string{"htmlLink": createdEvent.HtmlLink})
+		a.tasks[taskID] = models.TaskStatusResponse{
+			TaskID: taskID,
+			Status: models.StatusCompleted,
+			Result: resultData,
+		}
+	}
+}
+
+// handleTaskStatus (GÖREV DURUMUNU SORGULAR)
+func (a *CalendarAgent) handleTaskStatus(w http.ResponseWriter, r *http.Request) {
+	taskID := strings.TrimPrefix(r.URL.Path, "/task_status/")
+	if taskID == "" {
+		http.Error(w, "Task ID eksik", http.StatusBadRequest)
+		return
+	}
+	log.Printf("[Calendar Agent] /task_status/%s çağrıldı.", taskID)
+
+	a.tasksMu.RLock()
+	taskStatus, ok := a.tasks[taskID]
+	a.tasksMu.RUnlock()
+
+	if !ok {
+		http.Error(w, "Task not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(taskStatus)
 }
