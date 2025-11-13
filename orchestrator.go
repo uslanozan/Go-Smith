@@ -167,3 +167,36 @@ func (o *Orchestrator) HandleGetTools(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tools)
 }
+
+// HandleTaskStop, durdurma isteğini ilgili agent'a yönlendirir.
+func (o *Orchestrator) HandleTaskStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	taskID := strings.TrimPrefix(r.URL.Path, "/task_stop/")
+	
+	// Task bilgisini al
+	taskInfo, ok := o.TaskRegistry.GetTaskInfo(taskID)
+	if !ok {
+		http.Error(w, "Task not found in registry", http.StatusNotFound)
+		return
+	}
+
+	// ARTIK STRING REPLACE YOK! TEMİZ KOD:
+	// taskInfo.AgentStopBaseURL zaten "http://localhost:8082/task_stop/" şeklindedir.
+	fullStopURL := taskInfo.AgentStopBaseURL + taskID
+
+	// İsteği yönlendir
+	agentReq, _ := http.NewRequest("POST", fullStopURL, nil)
+	agentResp, err := o.HttpClient.Do(agentReq)
+	if err != nil {
+		http.Error(w, "Failed to reach agent", http.StatusServiceUnavailable)
+		return
+	}
+	defer agentResp.Body.Close()
+
+	w.WriteHeader(agentResp.StatusCode)
+	io.Copy(w, agentResp.Body)
+}

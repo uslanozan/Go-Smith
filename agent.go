@@ -24,7 +24,8 @@ type TaskRegistry struct {
 // durum sorgulama adresini saklar.
 type TaskInfo struct {
 	AgentName          string
-	AgentStatusBaseURL string // Örn: "http://localhost:8082/task_status/"
+	AgentStatusBaseURL string // Örn: http://localhost:8082/task_status/
+	AgentStopBaseURL   string // Örn: http://localhost:8082/task_stop/
 }
 
 // NewTaskRegistry, yeni, boş bir görev defteri oluşturur.
@@ -42,12 +43,15 @@ func (r *TaskRegistry) RegisterTask(taskID string, agent models.AgentDefinition)
 	if err != nil {
 		return err
 	}
-	// Yeni URL'yi oluştur: "http://localhost:8082" + "/task_status/"
+
 	statusURL := base.ResolveReference(&url.URL{Path: agent.StatusEndpointPath})
+
+	stopURL := base.ResolveReference(&url.URL{Path: agent.StopEndpointPath})
 
 	info := TaskInfo{
 		AgentName:          agent.Name,
 		AgentStatusBaseURL: statusURL.String(),
+		AgentStopBaseURL:   stopURL.String(),
 	}
 
 	r.mu.Lock()

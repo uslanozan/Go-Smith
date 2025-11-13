@@ -11,6 +11,7 @@ type AgentDefinition struct {
 	Schema      json.RawMessage `json:"schema"`
 	Endpoint    string          `json:"endpoint"`
 	StatusEndpointPath string `json:"status_endpoint_path,omitempty"`  // Agent asenkronsa görev durumunu sorgulama yolunu belirtir
+	StopEndpointPath   string `json:"stop_endpoint_path,omitempty"` // Stop endpointi
 }
 
 // Orchestrator'ımızın /tools endpoint'inden dönen format

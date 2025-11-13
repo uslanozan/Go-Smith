@@ -11,11 +11,16 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
-	"github.com/uslanozan/Ollama-the-Agent/models" // <-- Artık 'models' import ediliyor
+	"github.com/uslanozan/Ollama-the-Agent/models"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"
 )
+
+type TaskState struct {
+	Response   models.TaskStatusResponse
+	CancelFunc context.CancelFunc
+}
 
 type CreateEventArgs struct {
 	Summary   string `json:"summary"`
@@ -26,10 +31,10 @@ type CreateEventArgs struct {
 // CalendarAgent, bu servisin "beynidir".
 type CalendarAgent struct {
 	calSrv *calendar.Service
-	
+
 	// Agent'ın "görev defteri" (in-memory veritabanı)
 	tasksMu sync.RWMutex
-	tasks   map[string]models.TaskStatusResponse
+	tasks   map[string]TaskState
 }
 
 // initCalendarService, Google API'a bağlanır.
@@ -40,7 +45,7 @@ func initCalendarService() *calendar.Service {
 	if err := godotenv.Load("../../.env"); err != nil {
 		log.Println("Uyarı: .env dosyası bulunamadı.")
 	}
-	
+
 	// Sizin secrets yolunuzu koruyoruz
 	b, err := os.ReadFile("../../secrets/calendar_api.json")
 	if err != nil {
@@ -56,7 +61,7 @@ func initCalendarService() *calendar.Service {
 	if err != nil {
 		log.Fatalf("Calendar servisi başlatılamadı: %v", err)
 	}
-	
+
 	log.Println("Google Calendar servisi başarıyla bağlandı.")
 	return srv
 }
@@ -67,12 +72,13 @@ func main() {
 
 	agent := &CalendarAgent{
 		calSrv: calendarService,
-		tasks:   make(map[string]models.TaskStatusResponse),
+		tasks:  make(map[string]TaskState),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/create_event", agent.handleCreateEvent)
 	mux.HandleFunc("/task_status/", agent.handleTaskStatus) // <-- YENİ ENDPOINT
+	mux.HandleFunc("/task_stop/", agent.handleStopTask)
 
 	log.Println("[Calendar Agent] Asenkron Google Calendar agent servisi http://localhost:8082 adresinde başlatılıyor...")
 	if err := http.ListenAndServe(":8082", mux); err != nil {
@@ -82,7 +88,6 @@ func main() {
 
 // handleCreateEvent (GÖREVİ BAŞLATIR)
 func (a *CalendarAgent) handleCreateEvent(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 
 	log.Println("[Calendar Agent] /create_event (async) çağrıldı.")
 
@@ -96,19 +101,26 @@ func (a *CalendarAgent) handleCreateEvent(w http.ResponseWriter, r *http.Request
 	// 2. Yeni bir benzersiz Task ID oluştur
 	taskID := uuid.NewString()
 
-	// 3. Görevin ilk durumunu (pending) oluştur
-	taskStatus := models.TaskStatusResponse{
-		TaskID: taskID,
-		Status: models.StatusPending,
-	}
+	// Bu context, sunucu kapanmadığı sürece veya iptal edilmedikçe yaşar
+	bgCtx := context.Background()
+
+	taskCtx, cancel := context.WithCancel(bgCtx)
+
+
 
 	// 4. Görevi "görev defterine" (map) kaydet
 	a.tasksMu.Lock()
-	a.tasks[taskID] = taskStatus
+	a.tasks[taskID] = TaskState{
+		Response: models.TaskStatusResponse{
+			TaskID: taskID,
+			Status: models.StatusPending,
+		},
+		CancelFunc: cancel, // <-- İPTAL FONKSİYONUNU SAKLIYORUZ
+	}
 	a.tasksMu.Unlock()
 
 	// 5. ASIL İŞİ ARKA PLANDA (goroutine) BAŞLAT
-	go a.runCalendarTask(ctx, taskID, args)
+	go a.runCalendarTask(taskCtx, taskID, args)
 
 	// 6. KULLANICIYA ANINDA CEVAP DÖN (Sipariş Fişi)
 	log.Printf("Görev alındı, Task ID: %s", taskID)
@@ -124,9 +136,14 @@ func (a *CalendarAgent) handleCreateEvent(w http.ResponseWriter, r *http.Request
 func (a *CalendarAgent) runCalendarTask(ctx context.Context, taskID string, args CreateEventArgs) { // <-- GÜNCELLENDİ
 	// 1. Görevin durumunu "running" olarak güncelle
 	a.tasksMu.Lock()
-	a.tasks[taskID] = models.TaskStatusResponse{TaskID: taskID, Status: models.StatusRunning}
+	if state, exists := a.tasks[taskID]; exists {
+		state.Response = models.TaskStatusResponse{TaskID: taskID, Status: models.StatusRunning}
+		a.tasks[taskID] = state
+	}
 	a.tasksMu.Unlock()
 	log.Printf("Task %s: Durum 'running' olarak güncellendi.", taskID)
+    
+    log.Println("TEST: Uyku bitti, Google API'ye gidiliyor...")
 
 	// 2. GERÇEK İŞİ YAP (Google API'ı çağırma)
 	event := &calendar.Event{
@@ -134,10 +151,11 @@ func (a *CalendarAgent) runCalendarTask(ctx context.Context, taskID string, args
 		Start:   &calendar.EventDateTime{DateTime: args.StartTime, TimeZone: "Europe/Istanbul"},
 		End:     &calendar.EventDateTime{DateTime: args.EndTime, TimeZone: "Europe/Istanbul"},
 	}
-	
-	// Sizin .env okuma mantığınızı koruyoruz
+
 	calendarId := os.Getenv("GMAIL_ADDRESS")
-	if calendarId == "" { calendarId = "primary" }
+	if calendarId == "" {
+		calendarId = "primary"
+	}
 
 	createdEvent, err := a.calSrv.Events.Insert(calendarId, event).Context(ctx).Do()
 
@@ -145,33 +163,40 @@ func (a *CalendarAgent) runCalendarTask(ctx context.Context, taskID string, args
 	a.tasksMu.Lock()
 	defer a.tasksMu.Unlock()
 
+	updateState := func(resp models.TaskStatusResponse) {
+        if state, exists := a.tasks[taskID]; exists {
+            state.Response = resp
+            a.tasks[taskID] = state
+        }
+    }
+
 	if err != nil {
 		if err == context.Canceled || err == context.DeadlineExceeded {
 			// İptal durumu
 			log.Printf("Task %s: Durum 'failed' olarak güncellendi. SEBEP: İSTEK İPTAL EDİLDİ.", taskID)
-			a.tasks[taskID] = models.TaskStatusResponse{
+			updateState(models.TaskStatusResponse{
 				TaskID: taskID,
 				Status: models.StatusFailed,
 				Error:  "Task canceled by user request.",
-			}
+			})
 		} else {
 			// Normal hata durumu
 			log.Printf("Task %s: Durum 'failed' olarak güncellendi. Hata: %v", taskID, err)
-			a.tasks[taskID] = models.TaskStatusResponse{
+			updateState(models.TaskStatusResponse{
 				TaskID: taskID,
 				Status: models.StatusFailed,
 				Error:  err.Error(),
-			}
+			})
 		}
 	} else {
 		// Başarı durumu
 		log.Printf("Task %s: Durum 'completed' olarak güncellendi. Link: %s", taskID, createdEvent.HtmlLink)
 		resultData, _ := json.Marshal(map[string]string{"htmlLink": createdEvent.HtmlLink})
-		a.tasks[taskID] = models.TaskStatusResponse{
+        updateState(models.TaskStatusResponse{
 			TaskID: taskID,
 			Status: models.StatusCompleted,
 			Result: resultData,
-		}
+		})
 	}
 }
 
@@ -185,7 +210,7 @@ func (a *CalendarAgent) handleTaskStatus(w http.ResponseWriter, r *http.Request)
 	log.Printf("[Calendar Agent] /task_status/%s çağrıldı.", taskID)
 
 	a.tasksMu.RLock()
-	taskStatus, ok := a.tasks[taskID]
+	state, ok := a.tasks[taskID]
 	a.tasksMu.RUnlock()
 
 	if !ok {
@@ -194,5 +219,34 @@ func (a *CalendarAgent) handleTaskStatus(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(taskStatus)
+	json.NewEncoder(w).Encode(state.Response)
+}
+
+func (a *CalendarAgent) handleStopTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	taskID := strings.TrimPrefix(r.URL.Path, "/task_stop/")
+	log.Printf("[Calendar Agent] /task_stop/%s çağrıldı.", taskID)
+
+	a.tasksMu.Lock() // Yazma kilidi (garanti olsun)
+	state, ok := a.tasks[taskID]
+	a.tasksMu.Unlock()
+
+	if !ok {
+		http.Error(w, "Task not found", http.StatusNotFound)
+		return
+	}
+
+	// SİHİRLİ AN: Kaydettiğimiz cancel fonksiyonunu çağırıyoruz!
+	// Bu, runCalendarTask içindeki context'i anında öldürür.
+	if state.CancelFunc != nil {
+		state.CancelFunc()
+		log.Printf("Task %s için iptal sinyali tetiklendi.", taskID)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"stop signal sent"}`))
 }

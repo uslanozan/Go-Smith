@@ -266,6 +266,36 @@ func (g *Gateway) handleChatStatus(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+// handleChatStop, kullanıcının durdurma isteğini karşılar.
+func (g *Gateway) handleChatStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	taskID := strings.TrimPrefix(r.URL.Path, "/chat_stop/")
+	log.Printf("[Gateway] Durdurma isteği: TaskID: %s", taskID)
+
+	// Orchestrator'ın stop adresini oluştur
+	baseURL := strings.Replace(g.Config.OrchestratorRunTaskURL, "/run_task", "/task_stop/", 1)
+	fullStopURL := baseURL + taskID
+	log.Printf("[Gateway] Orchestrator'a gidiliyor: %s", fullStopURL)
+
+	// Orchestrator'a POST at
+	req, _ := http.NewRequest("POST", fullStopURL, nil)
+	resp, err := g.HttpClient.Do(req)
+	log.Printf("[Gateway] Orchestrator stop yanıtı: %s, %s, %s", resp.Status, baseURL, fullStopURL)
+
+	if err != nil {
+		http.Error(w, "Orchestrator request failed", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
 // main fonksiyonu artık tüm sistemi "kurar" (setup)
 func main() {
 	if err := godotenv.Load("./../.env"); err != nil {
@@ -283,7 +313,8 @@ func main() {
 	// 3. Handler'ları (metodları) router'a kaydet
 	mux := http.NewServeMux()
 	mux.HandleFunc("/chat", gateway.chatHandler)
-	mux.HandleFunc("/chat_status/", gateway.handleChatStatus) // <-- YENİ ENDPOINT KAYDI
+	mux.HandleFunc("/chat_status/", gateway.handleChatStatus)
+	mux.HandleFunc("/chat_stop/", gateway.handleChatStop)
 
 	log.Printf("[LLM Gateway] Ana Backend servisi %s adresinde başlatılıyor...", cfg.ListenAddress)
 	if err := http.ListenAndServe(cfg.ListenAddress, mux); err != nil {

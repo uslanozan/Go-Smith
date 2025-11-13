@@ -24,6 +24,7 @@ func main() {
 	mux.HandleFunc("/tools", orchestrator.HandleGetTools)
 	mux.HandleFunc("/run_task", orchestrator.HandleTask)
 	mux.HandleFunc("/task_status/", orchestrator.HandleTaskStatus)
+	mux.HandleFunc("/task_stop/", orchestrator.HandleTaskStop)
 
 	log.Println("Go Orchestrator sunucusu http://localhost:8080 adresinde başlatılıyor...")
 

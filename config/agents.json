@@ -51,6 +51,7 @@
       "required": ["summary", "start_time", "end_time"]
     },
     "endpoint": "http://localhost:8082/create_event",
-    "status_endpoint_path": "/task_status/"
+    "status_endpoint_path": "/task_status/",
+    "stop_endpoint_path": "/task_stop/"
   }
 ]
