@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"strings" // <-- YENİ IMPORT
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -33,6 +34,9 @@ type GatewayConfig struct {
 type Gateway struct {
 	Config     *GatewayConfig
 	HttpClient *http.Client
+	authKeys   map[string]string
+	historyMu  sync.RWMutex
+	history    map[string][]models.OllamaMessage
 }
 
 // NewGatewayConfig, .env dosyasını okur ve bir GatewayConfig struct'ı oluşturur.
@@ -62,12 +66,14 @@ func NewGatewayConfig() (*GatewayConfig, error) {
 }
 
 // NewGateway, yeni bir Gateway servisi oluşturur.
-func NewGateway(cfg *GatewayConfig) *Gateway {
+func NewGateway(cfg *GatewayConfig, authKeys map[string]string) *Gateway {
 	return &Gateway{
 		Config: cfg,
 		HttpClient: &http.Client{
 			Timeout: cfg.HttpClientTimeout,
 		},
+		authKeys: authKeys,
+		history:  make(map[string][]models.OllamaMessage),
 	}
 }
 
@@ -78,14 +84,14 @@ type ChatRequest struct {
 
 // --- 1. Adım: Orchestrator'dan Araç Listesini Al ---
 func (g *Gateway) getToolsFromOrchestrator(ctx context.Context) ([]models.ToolSpec, error) {
-    
-    // GÜNCELLENDİ: Context'i içeren yeni bir GET isteği oluştur
+
+	// GÜNCELLENDİ: Context'i içeren yeni bir GET isteği oluştur
 	req, err := http.NewRequestWithContext(ctx, "GET", g.Config.OrchestratorToolsURL, nil)
 	if err != nil {
 		return nil, err
 	}
 
-    // GÜNCELLENDİ: 'req' (context'i içeren) Do() metoduna gönderildi
+	// GÜNCELLENDİ: 'req' (context'i içeren) Do() metoduna gönderildi
 	resp, err := g.HttpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -156,68 +162,106 @@ func (g *Gateway) callOrchestrator(ctx context.Context, toolCall models.OllamaTo
 
 // --- Ana Chat Handler ---
 // GÜNCELLENDİ: Artık 200 OK (senkron) ve 202 Accepted (asenkron) durumlarını anlıyor.
-func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
+// Dosya: llm_gateway/gateway.go
 
+// --- Ana Chat Handler ---
+func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	// --- ADIM 1: AUTHENTICATION (Kimlik Doğrulama) ---
+	// ... (auth kodun burada, değişiklik yok) ...
+	authHeader := r.Header.Get("Authorization")
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	userID, ok := g.authKeys[token]
+	if !ok {
+		http.Error(w, "Invalid API Key", http.StatusUnauthorized)
+		return
+	}
+
+	// --- ADIM 2: İSTEĞİ OKUMA ---
 	var chatReq ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&chatReq); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	log.Printf("[Gateway] Yeni chat isteği alındı: %s", chatReq.Prompt)
+	log.Printf("[Gateway] User %s new request: %s", userID, chatReq.Prompt)
 
-	// ... (1. Adım: getToolsFromOrchestrator ve 2. Adım: convertToolsForOllama aynı) ...
+	// --- ADIM 3: ARAÇLARI HAZIRLAMA ---
 	tools, err := g.getToolsFromOrchestrator(ctx)
 	if err != nil { /* ...hata kontrolü... */ }
 	ollamaTools := convertToolsForOllama(tools)
 
-	// 3. Ollama'ya isteği (prompt + tools) gönder
+	// --- ADIM 4: MESAJ LİSTESİNİ VE HAFIZAYI OLUŞTURMA (GÜNCELLENDİ) ---
+
+	// 4a. Sistem Prompt'unu tanımla
+	systemPrompt := `You are "Silka", an AI assistant created by Ozan Uslan.
+Your primary goal is to be helpful and conversational.
+You MUST ONLY use tools when the user explicitly asks for a specific action (like 'create', 'send', 'set', 'get') or mentions a tool name ('Slack', 'Calendar').
+For simple greetings ('Hi', 'How are you?'), chit-chat, or memory questions ('what is my name?'), you MUST NOT use any tools. Just respond as a helpful assistant.`
+
+	// 4b. Kullanıcının yeni mesajını oluştur
+	newUserMessage := models.OllamaMessage{Role: "user", Content: chatReq.Prompt}
+
+	// 4c. Geçmişi al (KİLİTLİ OKUMA)
+	g.historyMu.RLock()
+	userHistory := g.history[userID]
+	g.historyMu.RUnlock()
+
+	// 4d. TÜM MESAJLARI BİRLEŞTİR
+	// Önce sistem prompt'u ile yeni bir liste başlat
+	messagesForOllama := []models.OllamaMessage{
+		{Role: "system", Content: systemPrompt},
+	}
+	// Sonra tüm geçmişi ekle
+	messagesForOllama = append(messagesForOllama, userHistory...)
+	// En sona o anki yeni mesajı ekle
+	messagesForOllama = append(messagesForOllama, newUserMessage)
+
+	// --- ADIM 5: OLLAMA'YI ÇAĞIRMA ---
 	ollamaReq := models.OllamaChatRequest{
-		Model: g.Config.OllamaModel,
-		Messages: []models.OllamaMessage{
-			{Role: "system", Content: "You are a helpful assistant that can use tools."},
-			{Role: "user", Content: chatReq.Prompt},
-		},
-		Tools:     ollamaTools,
-		Stream:    false,
+		Model:    g.Config.OllamaModel,
+		Messages: messagesForOllama, // <-- ARTIK HEPSİNİ İÇERİYOR
+		Tools:    ollamaTools,
+		Stream:   false,
 		KeepAlive: "1h",
 	}
+
 	// ... (Ollama'ya POST etme ve cevabı decode etme kısmı aynı) ...
 	reqBody, _ := json.Marshal(ollamaReq)
 	resp, err := g.HttpClient.Post(g.Config.OllamaURL, "application/json", bytes.NewBuffer(reqBody))
-	if err != nil { /* ...hata kontrolü... */ }
+	// ... (hata kontrolü)
 	defer resp.Body.Close()
 	var ollamaResp models.OllamaChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil { /* ...hata kontrolü... */ }
+	// ... (hata kontrolü)
 
-	// 4. Ollama'nın Cevabını Değerlendir
-	if len(ollamaResp.Message.ToolCalls) > 0 {
-		toolCall := ollamaResp.Message.ToolCalls[0]
-
-		// 5. Orchestrator'ı çağır
-		// Artık 3 değer alıyoruz: sonuç, durum kodu, hata
-		agentResult, statusCode, err := g.callOrchestrator(ctx, toolCall)		
-		if err != nil {
-			log.Printf("Hata: Orchestrator çağrılamadı: %v", err)
-			http.Error(w, "Agent çalıştırılamadı", statusCode) // Dönen hatayı yansıt
-			return
-		}
-
-		// 6. Agent'ın sonucunu kullanıcıya dön
-		// (Bu artık 200 OK (senkron sonuç) VEYA 202 Accepted (asenkron TaskID) olabilir)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(statusCode) // Orchestrator'dan gelen kodu (200 veya 202) yansıt
-		w.Write(agentResult)
-		return
+	// --- ADIM 6: CEVABI İŞLEME VE HAFIZAYI GÜNCELLEME ---
+	
+	assistantMessageToSave := models.OllamaMessage{
+		Role: "assistant",
 	}
 
-	// EĞER NORMAL METİN CEVABI VARSA:
-	log.Println("[Gateway] Ollama'dan normal metin cevabı alındı.")
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"response": ollamaResp.Message.Content,
-	})
+	if len(ollamaResp.Message.ToolCalls) > 0 {
+		// DURUM 1: TOOL CALL VAR
+		assistantMessageToSave.ToolCalls = ollamaResp.Message.ToolCalls
+
+		g.historyMu.Lock()
+		// GÜNCELLENDİ: Sadece 'user' ve 'assistant' mesajlarını kaydet (sistem prompt'unu değil)
+		g.history[userID] = append(userHistory, newUserMessage, assistantMessageToSave)
+		g.historyMu.Unlock()
+		
+		// ... (Orchestrator'ı çağırma ve 200/202 dönme kısmı aynı) ...
+
+	} else {
+		// DURUM 2: NORMAL METİN CEVABI VAR
+		assistantMessageToSave.Content = ollamaResp.Message.Content
+
+		g.historyMu.Lock()
+		// GÜNCELLENDİ: Sadece 'user' ve 'assistant' mesajlarını kaydet (sistem prompt'unu değil)
+		g.history[userID] = append(userHistory, newUserMessage, assistantMessageToSave)
+		g.historyMu.Unlock()
+
+		// ... (Kullanıcıya normal metin cevabı dönme kısmı aynı) ...
+	}
 }
 
 // --- YENİ ENDPOINT ---
@@ -240,7 +284,7 @@ func (g *Gateway) handleChatStatus(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Orchestrator'ın durum sorgulama adresini oluştur
 	// (örn: "http://localhost:8080/task_status/" + "abc-123")
-	fullStatusURL := g.Config.OrchestratorToolsURL + "/../task_status/" + taskID	
+	fullStatusURL := g.Config.OrchestratorToolsURL + "/../task_status/" + taskID
 	// (Daha sağlamı: g.Config'e OrchestratorTaskStatusURL eklemek)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", fullStatusURL, nil)
@@ -296,6 +340,27 @@ func (g *Gateway) handleChatStop(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+func loadAuthKeys() map[string]string {
+	keys := make(map[string]string)
+	// Tüm environment değişkenlerini oku
+	for _, env := range os.Environ() {
+		// Bizimkilerle eşleşenleri bul
+		if strings.HasPrefix(env, "API_KEY_") {
+			parts := strings.SplitN(env, "=", 2)
+			if len(parts) == 2 {
+				keyName := parts[0] // "API_KEY_OZAN"
+				token := parts[1]   // "ozan-secret-123"
+				
+				// "API_KEY_" önekini kaldırıp "ozan" (userID) elde et
+				userID := strings.ToLower(strings.TrimPrefix(keyName, "API_KEY_")) 
+				keys[token] = userID
+				log.Printf("Yüklendi: API Key kullanıcısı: %s", userID)
+			}
+		}
+	}
+	return keys
+}
+
 // main fonksiyonu artık tüm sistemi "kurar" (setup)
 func main() {
 	if err := godotenv.Load("./../.env"); err != nil {
@@ -308,7 +373,12 @@ func main() {
 		log.Fatalf("Config yüklenemedi: %v", err)
 	}
 
-	gateway := NewGateway(cfg)
+	authKeys := loadAuthKeys()
+	if len(authKeys) == 0 {
+		log.Println("UYARI: Hiçbir 'API_KEY_' .env'de bulunamadı. Kimlik doğrulama çalışmayacak.")
+	}
+
+	gateway := NewGateway(cfg, authKeys)
 
 	// 3. Handler'ları (metodları) router'a kaydet
 	mux := http.NewServeMux()

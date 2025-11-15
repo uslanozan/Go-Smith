@@ -53,5 +53,22 @@
     "endpoint": "http://localhost:8082/create_event",
     "status_endpoint_path": "/task_status/",
     "stop_endpoint_path": "/task_stop/"
-  }
+  },
+  {
+  "name": "pdf_converter",
+  "description": "Simulates converting a text file to PDF format asynchronously.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "file_name": {
+        "type": "string",
+        "description": "The name of the file to convert, e.g., 'report.txt'"
+      }
+    },
+    "required": ["file_name"]
+  },
+  "endpoint": "http://localhost:8083/convert_pdf",
+  "status_endpoint_path": "/task_status/",
+  "stop_endpoint_path": "/task_stop/"
+}
 ]

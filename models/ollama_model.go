@@ -17,6 +17,7 @@ type OllamaChatRequest struct {
 type OllamaMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	ToolCalls []OllamaToolCall `json:"tool_calls,omitempty"`
 }
 
 // Ollama'nın tool tanımı formatı

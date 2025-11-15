@@ -240,8 +240,6 @@ func (a *CalendarAgent) handleStopTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SİHİRLİ AN: Kaydettiğimiz cancel fonksiyonunu çağırıyoruz!
-	// Bu, runCalendarTask içindeki context'i anında öldürür.
 	if state.CancelFunc != nil {
 		state.CancelFunc()
 		log.Printf("Task %s için iptal sinyali tetiklendi.", taskID)
