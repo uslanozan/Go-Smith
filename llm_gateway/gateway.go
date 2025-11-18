@@ -230,9 +230,31 @@ For simple greetings ('Hi', 'How are you?'), chit-chat, or memory questions ('wh
 	reqBody, _ := json.Marshal(ollamaReq)
 	resp, err := g.HttpClient.Post(g.Config.OllamaURL, "application/json", bytes.NewBuffer(reqBody))
 	// ... (hata kontrolü)
+
+	if err != nil {
+		log.Printf("Hata: Ollama'ya ulaşılamadı: %v", err)
+		http.Error(w, "Ollama'ya ulaşılamadı", http.StatusInternalServerError)
+		return // Hata varsa 'resp' nil'dir, 'defer' çağırmadan çık!
+	}
+
 	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Hata: Ollama'dan gelen yanıt OKUNAMADI: %v", err)
+		http.Error(w, "Ollama yanıtı okunamadı", http.StatusInternalServerError)
+		return
+	}
+	// HAM CEVABI LOGLA:
+	log.Printf("[Gateway] Ollama HAM CEVABI: %s", string(bodyBytes))
+
 	var ollamaResp models.OllamaChatResponse
-	// ... (hata kontrolü)
+	
+	if err := json.Unmarshal(bodyBytes, &ollamaResp); err != nil {
+		log.Printf("Hata: Ollama'dan gelen yanıt PARSE EDİLEMEDİ: %v", err)
+		http.Error(w, "Ollama yanıtı anlaşılamadı", http.StatusInternalServerError)
+		return
+	}
 
 	// --- ADIM 6: CEVABI İŞLEME VE HAFIZAYI GÜNCELLEME ---
 	
@@ -249,7 +271,26 @@ For simple greetings ('Hi', 'How are you?'), chit-chat, or memory questions ('wh
 		g.history[userID] = append(userHistory, newUserMessage, assistantMessageToSave)
 		g.historyMu.Unlock()
 		
-		// ... (Orchestrator'ı çağırma ve 200/202 dönme kısmı aynı) ...
+		log.Printf("[Gateway] User %s için sohbet geçmişi (Tool Call) güncellendi.", userID)
+
+		// 5. Orchestrator'ı çağır
+		toolCall := ollamaResp.Message.ToolCalls[0]
+		
+		// callOrchestrator artık 3 değer dönüyor: body, status, error
+		agentResult, statusCode, err := g.callOrchestrator(ctx, toolCall) 
+		if err != nil {
+			log.Printf("Hata: Orchestrator çağrılamadı: %v", err)
+			http.Error(w, "Agent çalıştırılamadı", statusCode)
+			return
+		}
+
+		// 6. Agent'ın sonucunu kullanıcıya dön
+		w.Header().Set("Content-Type", "application/json")
+		// Buraya da Content-Length eklemek iyi bir pratiktir
+		w.Header().Set("Content-Length", strconv.Itoa(len(agentResult)))
+		w.WriteHeader(statusCode)
+		w.Write(agentResult)
+		return
 
 	} else {
 		// DURUM 2: NORMAL METİN CEVABI VAR
@@ -260,7 +301,30 @@ For simple greetings ('Hi', 'How are you?'), chit-chat, or memory questions ('wh
 		g.history[userID] = append(userHistory, newUserMessage, assistantMessageToSave)
 		g.historyMu.Unlock()
 
-		// ... (Kullanıcıya normal metin cevabı dönme kısmı aynı) ...
+		log.Printf("[Gateway] User %s için sohbet geçmişi (Metin) güncellendi.", userID)
+		log.Println("[Gateway] Ollama'dan normal metin cevabı alındı.")
+
+		// --- POSTMAN GÖRÜNMEZLİK SORUNU ÇÖZÜMÜ ---
+		
+		// 1. Cevabı hazırla
+		responseMap := map[string]string{
+			"response": ollamaResp.Message.Content,
+		}
+
+		// 2. Byte'a çevir
+		responseBytes, err := json.Marshal(responseMap)
+		if err != nil {
+			http.Error(w, "Response encoding error", http.StatusInternalServerError)
+			return
+		}
+
+		// 3. Headerları ayarla (ÖZELLİKLE CONTENT-LENGTH)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", strconv.Itoa(len(responseBytes))) 
+		w.WriteHeader(http.StatusOK)
+
+		// 4. Gönder
+		w.Write(responseBytes)
 	}
 }
 
