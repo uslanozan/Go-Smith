@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/uslanozan/Ollama-the-Agent/models"
+	"github.com/uslanozan/Gollama-the-Orchestrator/models"
 )
 
 // Orchestrator registry ve diğer servislere istek atmak için bir HTTP client'ı tutar.

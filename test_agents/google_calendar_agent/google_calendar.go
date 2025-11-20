@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
-	"github.com/uslanozan/Ollama-the-Agent/models"
+	"github.com/uslanozan/Gollama-the-Orchestrator/models"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"

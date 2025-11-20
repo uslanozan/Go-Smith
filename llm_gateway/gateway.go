@@ -13,11 +13,11 @@ import (
 	"os"
 	"strconv"
 	"strings" // <-- YENİ IMPORT
-	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/uslanozan/Ollama-the-Agent/models"
+	"github.com/uslanozan/Gollama-the-Orchestrator/models"
+	"gorm.io/gorm"
 )
 
 // GatewayConfig, .env dosyasından yüklenen tüm ayarları tutar.
@@ -34,9 +34,7 @@ type GatewayConfig struct {
 type Gateway struct {
 	Config     *GatewayConfig
 	HttpClient *http.Client
-	authKeys   map[string]string
-	historyMu  sync.RWMutex
-	history    map[string][]models.OllamaMessage
+	DB *gorm.DB
 }
 
 // NewGatewayConfig, .env dosyasını okur ve bir GatewayConfig struct'ı oluşturur.
@@ -66,14 +64,13 @@ func NewGatewayConfig() (*GatewayConfig, error) {
 }
 
 // NewGateway, yeni bir Gateway servisi oluşturur.
-func NewGateway(cfg *GatewayConfig, authKeys map[string]string) *Gateway {
+func NewGateway(cfg *GatewayConfig, db *gorm.DB) *Gateway {
 	return &Gateway{
 		Config: cfg,
 		HttpClient: &http.Client{
 			Timeout: cfg.HttpClientTimeout,
 		},
-		authKeys: authKeys,
-		history:  make(map[string][]models.OllamaMessage),
+		DB: db,
 	}
 }
 
@@ -168,177 +165,104 @@ func (g *Gateway) callOrchestrator(ctx context.Context, toolCall models.OllamaTo
 func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// --- ADIM 1: AUTHENTICATION (Kimlik Doğrulama) ---
-	// ... (auth kodun burada, değişiklik yok) ...
+	// 1. AUTHENTICATION (DB'den)
 	authHeader := r.Header.Get("Authorization")
 	token := strings.TrimPrefix(authHeader, "Bearer ")
-	userID, ok := g.authKeys[token]
-	if !ok {
+	
+	var user models.User
+	// DB'de API Key ara
+	if result := g.DB.Where("api_key = ?", token).First(&user); result.Error != nil {
 		http.Error(w, "Invalid API Key", http.StatusUnauthorized)
 		return
 	}
+	log.Printf("[Gateway] Authenticated user: %s (ID: %d)", user.Username, user.ID)
 
-	// --- ADIM 2: İSTEĞİ OKUMA ---
+	// 2. İSTEĞİ OKUMA
 	var chatReq ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&chatReq); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	log.Printf("[Gateway] User %s new request: %s", userID, chatReq.Prompt)
 
-	// --- ADIM 3: ARAÇLARI HAZIRLAMA ---
-	tools, err := g.getToolsFromOrchestrator(ctx)
-	if err != nil { /* ...hata kontrolü... */ }
+	// 3. ARAÇLARI HAZIRLAMA
+	tools, _ := g.getToolsFromOrchestrator(ctx)
 	ollamaTools := convertToolsForOllama(tools)
 
-	// --- ADIM 4: MESAJ LİSTESİNİ VE HAFIZAYI OLUŞTURMA (GÜNCELLENDİ) ---
+	// 4. HAFIZA (DB'den Çekme)
+	var dbHistory []models.Message
+	g.DB.Where("user_id = ?", user.ID).Order("created_at asc").Find(&dbHistory)
 
-	// 4a. Sistem Prompt'unu tanımla
-	systemPrompt := `You are "Silka", an AI assistant created by Ozan Uslan.
-Your primary goal is to be helpful and conversational.
-You MUST ONLY use tools when the user explicitly asks for a specific action (like 'create', 'send', 'set', 'get') or mentions a tool name ('Slack', 'Calendar').
-For simple greetings ('Hi', 'How are you?'), chit-chat, or memory questions ('what is my name?'), you MUST NOT use any tools. Just respond as a helpful assistant.`
+	var messagesForOllama []models.OllamaMessage
+	// Sistem Prompt
+	systemPrompt := `You are "Silka", an AI assistant created by Ozan Uslan. Your primary goal is to be helpful and conversational. You MUST ONLY use tools when the user explicitly asks for a specific action.`
+	messagesForOllama = append(messagesForOllama, models.OllamaMessage{Role: "system", Content: systemPrompt})
 
-	// 4b. Kullanıcının yeni mesajını oluştur
-	newUserMessage := models.OllamaMessage{Role: "user", Content: chatReq.Prompt}
-
-	// 4c. Geçmişi al (KİLİTLİ OKUMA)
-	g.historyMu.RLock()
-	userHistory := g.history[userID]
-	g.historyMu.RUnlock()
-
-	// 4d. TÜM MESAJLARI BİRLEŞTİR
-	// Önce sistem prompt'u ile yeni bir liste başlat
-	messagesForOllama := []models.OllamaMessage{
-		{Role: "system", Content: systemPrompt},
+	// MySQL'den çekilen Geçmiş Mesajlar
+	for _, msg := range dbHistory {
+		var toolCalls []models.OllamaToolCall
+		if len(msg.ToolCallsJSON) > 0 {
+			json.Unmarshal(msg.ToolCallsJSON, &toolCalls)
+		}
+		messagesForOllama = append(messagesForOllama, models.OllamaMessage{Role: msg.Role, Content: msg.Content, ToolCalls: toolCalls})
 	}
-	// Sonra tüm geçmişi ekle
-	messagesForOllama = append(messagesForOllama, userHistory...)
-	// En sona o anki yeni mesajı ekle
-	messagesForOllama = append(messagesForOllama, newUserMessage)
 
-	// --- ADIM 5: OLLAMA'YI ÇAĞIRMA ---
+	// Yeni Mesaj
+	messagesForOllama = append(messagesForOllama, models.OllamaMessage{Role: "user", Content: chatReq.Prompt})
+
+	// 5. OLLAMA ÇAĞRISI
 	ollamaReq := models.OllamaChatRequest{
-		Model:    g.Config.OllamaModel,
-		Messages: messagesForOllama, // <-- ARTIK HEPSİNİ İÇERİYOR
-		Tools:    ollamaTools,
-		Stream:   false,
-		KeepAlive: "1h",
+		Model: g.Config.OllamaModel, Messages: messagesForOllama, Tools: ollamaTools, Stream: false, KeepAlive: "1h",
 	}
-
-	// ... (Ollama'ya POST etme ve cevabı decode etme kısmı aynı) ...
 	reqBody, _ := json.Marshal(ollamaReq)
 	resp, err := g.HttpClient.Post(g.Config.OllamaURL, "application/json", bytes.NewBuffer(reqBody))
-	// ... (hata kontrolü)
-
-	if err != nil {
-		log.Printf("Hata: Ollama'ya ulaşılamadı: %v", err)
-		http.Error(w, "Ollama'ya ulaşılamadı", http.StatusInternalServerError)
-		return // Hata varsa 'resp' nil'dir, 'defer' çağırmadan çık!
-	}
-
+	if err != nil { /* Hata */ return }
 	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Hata: Ollama'dan gelen yanıt OKUNAMADI: %v", err)
-		http.Error(w, "Ollama yanıtı okunamadı", http.StatusInternalServerError)
-		return
-	}
-	// HAM CEVABI LOGLA:
-	log.Printf("[Gateway] Ollama HAM CEVABI: %s", string(bodyBytes))
-
+	bodyBytes, _ := io.ReadAll(resp.Body)
 	var ollamaResp models.OllamaChatResponse
-	
-	if err := json.Unmarshal(bodyBytes, &ollamaResp); err != nil {
-		log.Printf("Hata: Ollama'dan gelen yanıt PARSE EDİLEMEDİ: %v", err)
-		http.Error(w, "Ollama yanıtı anlaşılamadı", http.StatusInternalServerError)
-		return
-	}
+	json.Unmarshal(bodyBytes, &ollamaResp)
 
-	// --- ADIM 6: CEVABI İŞLEME VE HAFIZAYI GÜNCELLEME ---
+	// 6. KAYIT VE CEVAP
 	
-	assistantMessageToSave := models.OllamaMessage{
-		Role: "assistant",
-	}
+	// Kullanıcının sorusunu kaydet
+	g.DB.Create(&models.Message{UserID: user.ID, Role: "user", Content: chatReq.Prompt})
 
 	if len(ollamaResp.Message.ToolCalls) > 0 {
-		// DURUM 1: TOOL CALL VAR
-		assistantMessageToSave.ToolCalls = ollamaResp.Message.ToolCalls
-
-		g.historyMu.Lock()
-		// GÜNCELLENDİ: Sadece 'user' ve 'assistant' mesajlarını kaydet (sistem prompt'unu değil)
-		g.history[userID] = append(userHistory, newUserMessage, assistantMessageToSave)
-		g.historyMu.Unlock()
+		// Tool Call Kaydet
+		toolCalls := ollamaResp.Message.ToolCalls
+		tcJSON, _ := json.Marshal(toolCalls)
+		g.DB.Create(&models.Message{UserID: user.ID, Role: "assistant", ToolCallsJSON: tcJSON})
 		
-		log.Printf("[Gateway] User %s için sohbet geçmişi (Tool Call) güncellendi.", userID)
-
-		// 5. Orchestrator'ı çağır
-		toolCall := ollamaResp.Message.ToolCalls[0]
-		
-		// callOrchestrator artık 3 değer dönüyor: body, status, error
-		agentResult, statusCode, err := g.callOrchestrator(ctx, toolCall) 
-		if err != nil {
-			log.Printf("Hata: Orchestrator çağrılamadı: %v", err)
-			http.Error(w, "Agent çalıştırılamadı", statusCode)
-			return
-		}
-
-		// 6. Agent'ın sonucunu kullanıcıya dön
+		// Orchestrator
+		res, status, _ := g.callOrchestrator(ctx, toolCalls[0])
 		w.Header().Set("Content-Type", "application/json")
-		// Buraya da Content-Length eklemek iyi bir pratiktir
-		w.Header().Set("Content-Length", strconv.Itoa(len(agentResult)))
-		w.WriteHeader(statusCode)
-		w.Write(agentResult)
-		return
-
+		w.WriteHeader(status)
+		w.Write(res)
 	} else {
-		// DURUM 2: NORMAL METİN CEVABI VAR
-		assistantMessageToSave.Content = ollamaResp.Message.Content
+		// Normal Cevap Kaydet
+		content := ollamaResp.Message.Content
+		g.DB.Create(&models.Message{UserID: user.ID, Role: "assistant", Content: content})
 
-		g.historyMu.Lock()
-		// GÜNCELLENDİ: Sadece 'user' ve 'assistant' mesajlarını kaydet (sistem prompt'unu değil)
-		g.history[userID] = append(userHistory, newUserMessage, assistantMessageToSave)
-		g.historyMu.Unlock()
-
-		log.Printf("[Gateway] User %s için sohbet geçmişi (Metin) güncellendi.", userID)
-		log.Println("[Gateway] Ollama'dan normal metin cevabı alındı.")
-
-		// --- POSTMAN GÖRÜNMEZLİK SORUNU ÇÖZÜMÜ ---
-		
-		// 1. Cevabı hazırla
-		responseMap := map[string]string{
-			"response": ollamaResp.Message.Content,
-		}
-
-		// 2. Byte'a çevir
-		responseBytes, err := json.Marshal(responseMap)
-		if err != nil {
-			http.Error(w, "Response encoding error", http.StatusInternalServerError)
-			return
-		}
-
-		// 3. Headerları ayarla (ÖZELLİKLE CONTENT-LENGTH)
+		// Cevap Dön
+		resMap := map[string]string{"response": content}
+		resBytes, _ := json.Marshal(resMap)
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Length", strconv.Itoa(len(responseBytes))) 
-		w.WriteHeader(http.StatusOK)
-
-		// 4. Gönder
-		w.Write(responseBytes)
+		w.Header().Set("Content-Length", strconv.Itoa(len(resBytes)))
+		w.Write(resBytes)
 	}
 }
 
-// --- YENİ ENDPOINT ---
-// handleChatStatus, kullanıcının bir görevin durumunu sorgulamasını sağlar.
+// handleChatStatus: Kullanıcının bir görevin durumunu sorgulamasını sağlar.
 func (g *Gateway) handleChatStatus(w http.ResponseWriter, r *http.Request) {
+	// 1. Context'i al (İptal sinyalleri için)
 	ctx := r.Context()
 
+	// 2. Sadece GET isteğine izin ver
 	if r.Method != "GET" {
 		http.Error(w, "Only GET method is allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 1. URL'den Task ID'yi ayıkla (örn: "/chat_status/abc-123" -> "abc-123")
+	// 3. URL'den Task ID'yi ayıkla
 	taskID := strings.TrimPrefix(r.URL.Path, "/chat_status/")
 	if taskID == "" {
 		http.Error(w, "Task ID eksik", http.StatusBadRequest)
@@ -346,89 +270,81 @@ func (g *Gateway) handleChatStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[Gateway] Durum sorgusu alındı: TaskID: %s", taskID)
 
-	// 2. Orchestrator'ın durum sorgulama adresini oluştur
+	// 4. Orchestrator'ın adresini oluştur
 	// (örn: "http://localhost:8080/task_status/" + "abc-123")
 	fullStatusURL := g.Config.OrchestratorToolsURL + "/../task_status/" + taskID
-	// (Daha sağlamı: g.Config'e OrchestratorTaskStatusURL eklemek)
 
+	// 5. İsteği hazırla (Context ile birlikte)
 	req, err := http.NewRequestWithContext(ctx, "GET", fullStatusURL, nil)
 	if err != nil {
-		log.Printf("Hata: Orchestrator durum sorgu isteği oluşturulamadı: %v", err)
+		log.Printf("Hata: İstek oluşturulamadı: %v", err)
 		http.Error(w, "Request creation failed", http.StatusInternalServerError)
 		return
 	}
 
-	// 3. İsteği Orchestrator'a yönlendir (Proxy)
+	// 6. İsteği Orchestrator'a gönder (CRITICAL FIX BURADA)
 	resp, err := g.HttpClient.Do(req)
+	
+	// HATA KONTROLÜ ÖNCE YAPILMALI:
 	if err != nil {
 		log.Printf("Hata: Orchestrator durum sorgulanamadı: %v", err)
 		http.Error(w, "Orchestrator status check failed", http.StatusServiceUnavailable)
 		return
 	}
+	// Hata yoksa 'defer' güvenlidir
 	defer resp.Body.Close()
 
-	// 4. Orchestrator'ın durum raporunu (TaskStatusResponse) kullanıcıya geri yolla
+	// 7. Orchestrator'dan gelen cevabı kullanıcıya yansıt (Proxy)
 	log.Printf("[Gateway] Orchestrator durum yanıtı verdi: %s", resp.Status)
+	
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 }
 
-// handleChatStop, kullanıcının durdurma isteğini karşılar.
+// handleChatStop: Kullanıcının durdurma isteğini karşılar.
 func (g *Gateway) handleChatStop(w http.ResponseWriter, r *http.Request) {
+	// 1. Sadece POST isteğine izin ver
 	if r.Method != "POST" {
 		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	// 2. URL'den Task ID'yi ayıkla
 	taskID := strings.TrimPrefix(r.URL.Path, "/chat_stop/")
 	log.Printf("[Gateway] Durdurma isteği: TaskID: %s", taskID)
 
-	// Orchestrator'ın stop adresini oluştur
+	// 3. Orchestrator'ın stop adresini oluştur (String replace ile)
 	baseURL := strings.Replace(g.Config.OrchestratorRunTaskURL, "/run_task", "/task_stop/", 1)
 	fullStopURL := baseURL + taskID
+	
 	log.Printf("[Gateway] Orchestrator'a gidiliyor: %s", fullStopURL)
 
-	// Orchestrator'a POST at
+	// 4. Orchestrator'a POST at
 	req, _ := http.NewRequest("POST", fullStopURL, nil)
+	
+	// 5. İsteği gönder (CRITICAL FIX BURADA)
 	resp, err := g.HttpClient.Do(req)
-	log.Printf("[Gateway] Orchestrator stop yanıtı: %s, %s, %s", resp.Status, baseURL, fullStopURL)
 
+	// HATA KONTROLÜ ÖNCE YAPILMALI:
 	if err != nil {
+		log.Printf("Hata: Orchestrator'a durdurma isteği atılamadı: %v", err)
 		http.Error(w, "Orchestrator request failed", http.StatusServiceUnavailable)
 		return
 	}
+	// Hata yoksa 'defer' güvenlidir
 	defer resp.Body.Close()
 
+	log.Printf("[Gateway] Orchestrator stop yanıtı: %s", resp.Status)
+
+	// 6. Cevabı kullanıcıya yansıt
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
-}
-
-func loadAuthKeys() map[string]string {
-	keys := make(map[string]string)
-	// Tüm environment değişkenlerini oku
-	for _, env := range os.Environ() {
-		// Bizimkilerle eşleşenleri bul
-		if strings.HasPrefix(env, "API_KEY_") {
-			parts := strings.SplitN(env, "=", 2)
-			if len(parts) == 2 {
-				keyName := parts[0] // "API_KEY_OZAN"
-				token := parts[1]   // "ozan-secret-123"
-				
-				// "API_KEY_" önekini kaldırıp "ozan" (userID) elde et
-				userID := strings.ToLower(strings.TrimPrefix(keyName, "API_KEY_")) 
-				keys[token] = userID
-				log.Printf("Yüklendi: API Key kullanıcısı: %s", userID)
-			}
-		}
-	}
-	return keys
 }
 
 // main fonksiyonu artık tüm sistemi "kurar" (setup)
 func main() {
 	if err := godotenv.Load("./../.env"); err != nil {
-		// .env dosyasını llm_gateway klasöründe arar
 		log.Println("Uyarı: .env dosyası bulunamadı, environment değişkenleri kullanılacak.")
 	}
 
@@ -437,14 +353,13 @@ func main() {
 		log.Fatalf("Config yüklenemedi: %v", err)
 	}
 
-	authKeys := loadAuthKeys()
-	if len(authKeys) == 0 {
-		log.Println("UYARI: Hiçbir 'API_KEY_' .env'de bulunamadı. Kimlik doğrulama çalışmayacak.")
-	}
+	db, err := InitDB()
+    if err != nil {
+        log.Fatalf("DB Hatası: %v", err)
+    }
 
-	gateway := NewGateway(cfg, authKeys)
+	gateway := NewGateway(cfg, db)
 
-	// 3. Handler'ları (metodları) router'a kaydet
 	mux := http.NewServeMux()
 	mux.HandleFunc("/chat", gateway.chatHandler)
 	mux.HandleFunc("/chat_status/", gateway.handleChatStatus)
