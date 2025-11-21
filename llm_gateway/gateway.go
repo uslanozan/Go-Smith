@@ -171,6 +171,7 @@ func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
 	
 	var user models.User
 	// DB'de API Key ara
+	//todo: DB işlemlerini fonksiyonel hale getir
 	if result := g.DB.Where("api_key = ?", token).First(&user); result.Error != nil {
 		http.Error(w, "Invalid API Key", http.StatusUnauthorized)
 		return
@@ -190,7 +191,17 @@ func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 4. HAFIZA (DB'den Çekme)
 	var dbHistory []models.Message
-	g.DB.Where("user_id = ?", user.ID).Order("created_at asc").Find(&dbHistory)
+
+	limit := 20
+	g.DB.Where("user_id = ?", user.ID).
+		Order("created_at desc"). // En yeniler üstte
+		Limit(limit).
+		Find(&dbHistory)
+
+	// LLM yukarıdan aşağı okuduğu için listeyi ters çeviriyoruz eskiden yeniye
+	for i, j := 0, len(dbHistory)-1; i < j; i, j = i+1, j-1 {
+		dbHistory[i], dbHistory[j] = dbHistory[j], dbHistory[i]
+	}
 
 	var messagesForOllama []models.OllamaMessage
 	// Sistem Prompt
