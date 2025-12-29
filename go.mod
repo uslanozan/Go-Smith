@@ -1,4 +1,4 @@
-module github.com/uslanozan/Gollama-the-Orchestrator
+module github.com/uslanozan/Go-Smith
 
 go 1.24.0
 

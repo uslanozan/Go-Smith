@@ -10,7 +10,7 @@ import (
 
 	"github.com/invopop/jsonschema"
 	// Modül adının go.mod dosyanla aynı olduğundan emin ol
-	"github.com/uslanozan/Gollama-the-Orchestrator/models"
+	"github.com/uslanozan/Go-Smith/models"
 )
 
 // SharedDTOs: Request ve Response yapılarını tek çatı altında toplar

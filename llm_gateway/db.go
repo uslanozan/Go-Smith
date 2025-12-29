@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/uslanozan/Gollama-the-Orchestrator/models"
+	"github.com/uslanozan/Go-Smith/models"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"

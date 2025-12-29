@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+test_agents/cpp_math_agent/* linguist-vendored
+*.cpp linguist-vendored
+*.hpp linguist-vendored

@@ -10,7 +10,9 @@
       },
       "required": ["channel_id", "text"]
     },
-    "endpoint": "http://localhost:8081/send_message"
+    "endpoint": "http://localhost:8081/send_message",
+    "status_endpoint_path": "/task_status/",
+    "stop_endpoint_path": "/task_stop/"
   },
   {
     "name": "slack_read_messages",
@@ -23,7 +25,9 @@
       },
       "required": ["channel_id"]
     },
-    "endpoint": "http://localhost:8081/read_messages"
+    "endpoint": "http://localhost:8081/read_messages",
+    "status_endpoint_path": "/task_status/",
+    "stop_endpoint_path": "/task_stop/"
   },
   {
     "name": "create_calendar_event",
@@ -50,25 +54,59 @@
       },
       "required": ["summary", "start_time", "end_time"]
     },
-    "endpoint": "http://localhost:8082/create_event",
+    "endpoint": "http://localhost:8082/execute", 
     "status_endpoint_path": "/task_status/",
     "stop_endpoint_path": "/task_stop/"
   },
   {
-  "name": "pdf_converter",
-  "description": "Simulates converting a text file to PDF format asynchronously.",
-  "schema": {
-    "type": "object",
-    "properties": {
-      "file_name": {
-        "type": "string",
-        "description": "The name of the file to convert, e.g., 'report.txt'"
-      }
+    "name": "pdf_converter",
+    "description": "Simulates converting a text file to PDF format asynchronously.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "file_name": {
+          "type": "string",
+          "description": "The name of the file to convert, e.g., 'report.txt'"
+        }
+      },
+      "required": ["file_name"]
     },
-    "required": ["file_name"]
+    "endpoint": "http://localhost:8083/execute",
+    "status_endpoint_path": "/task_status/",
+    "stop_endpoint_path": "/task_stop/"
   },
-  "endpoint": "http://localhost:8083/convert_pdf",
-  "status_endpoint_path": "/task_status/",
-  "stop_endpoint_path": "/task_stop/"
-}
+  {
+    "name": "finance_analysis",
+    "description": "Retrieves current price information for a specific cryptocurrency (e.g., BTC, ETH) or fiat currency.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string",
+          "description": "The currency symbol to check, e.g., 'BTC', 'ETH', 'USD'"
+        }
+      },
+      "required": ["currency"]
+    },
+    "endpoint": "http://localhost:8001/execute",
+    "status_endpoint_path": "/task_status/",
+    "stop_endpoint_path": "/task_stop/"
+  },
+  {
+    "name": "heavy_math_calculation",
+    "description": "Performs complex mathematical calculations (square and cube) on a given number.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "integer",
+          "description": "The number to process."
+        }
+      },
+      "required": ["number"]
+    },
+    "endpoint": "http://localhost:8084/execute",
+    "status_endpoint_path": "/task_status/",
+    "stop_endpoint_path": "/task_stop/"
+  }
 ]

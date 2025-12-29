@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/uslanozan/Gollama-the-Orchestrator/models"
+	"github.com/uslanozan/Go-Smith/models"
 )
 type TaskState struct {
 	Response   models.TaskStatusResponse

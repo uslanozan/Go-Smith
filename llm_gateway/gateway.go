@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/uslanozan/Gollama-the-Orchestrator/models"
+	"github.com/uslanozan/Go-Smith/models"
 	"gorm.io/gorm"
 )
 

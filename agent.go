@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync"
 	"net/url"
-	"github.com/uslanozan/Gollama-the-Orchestrator/models"
+	"github.com/uslanozan/Go-Smith/models"
 )
 
 // Tüm agent'ları tutan ve yöneten merkezi registry
