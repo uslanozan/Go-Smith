@@ -10,6 +10,7 @@ func main() {
 	registry := NewAgentRegistry()
 
 	// 2. Agent'ları koddan değil, config dosyasından yükle
+	//todo: Gelecekte buradaki config'i backendden alacak
 	if err := LoadAgentsFromConfig(registry, "config/agents.json"); err != nil {
 		log.Fatalf("Agent konfigürasyonu yüklenemedi: %v", err)
 	}

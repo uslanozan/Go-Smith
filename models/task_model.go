@@ -2,6 +2,8 @@ package models
 
 import (
 	"encoding/json"
+
+	"github.com/invopop/jsonschema"
 )
 
 // LLM'den Orchestrator'a gelecek olan JSON isteğinin formatıdır.
@@ -33,4 +35,16 @@ type TaskStatusResponse struct {
 	Status  TaskStatus      `json:"status"`
 	Result  json.RawMessage `json:"result,omitempty"` // İş bittiyse sonuç (örn: {"htmlLink": "..."})
 	Error   string          `json:"error,omitempty"`  // İş hata verdiyse hata mesajı
+}
+
+func (TaskStatus) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		Type: "string",
+		Enum: []any{
+			StatusPending,
+			StatusRunning,
+			StatusCompleted,
+			StatusFailed,
+		},
+	}
 }

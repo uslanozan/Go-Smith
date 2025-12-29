@@ -4,6 +4,10 @@
 # Binaries for programs and plugins
 secrets/
 calendar_api.json
+venv/
+env/
+__pycache__
+.vscode
 
 *.exe
 *.exe~

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "OrchestratorTaskRequest": {
+      "properties": {
+        "agent_name": {
+          "type": "string"
+        },
+        "arguments": true
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "agent_name",
+        "arguments"
+      ]
+    },
+    "TaskStartResponse": {
+      "properties": {
+        "task_id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TaskStatus"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "task_id",
+        "status"
+      ]
+    },
+    "TaskStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "failed"
+      ]
+    },
+    "TaskStatusResponse": {
+      "properties": {
+        "task_id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TaskStatus"
+        },
+        "result": true,
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "task_id",
+        "status"
+      ]
+    }
+  },
+  "properties": {
+    "request": {
+      "$ref": "#/$defs/OrchestratorTaskRequest"
+    },
+    "start_response": {
+      "$ref": "#/$defs/TaskStartResponse"
+    },
+    "status_response": {
+      "$ref": "#/$defs/TaskStatusResponse"
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "request",
+    "start_response",
+    "status_response"
+  ]
+}
