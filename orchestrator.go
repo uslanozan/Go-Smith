@@ -1,4 +1,3 @@
-// Server Side
 package main
 
 import (
@@ -15,18 +14,18 @@ import (
 
 // Orchestrator registry ve diğer servislere istek atmak için bir HTTP client'ı tutar.
 type Orchestrator struct {
-	Registry   *AgentRegistry
+	Registry     *AgentRegistry
 	TaskRegistry *TaskRegistry
-	HttpClient *http.Client
+	HttpClient   *http.Client
 }
 
 // Constructor
 func NewOrchestrator(registry *AgentRegistry, taskRegistry *TaskRegistry) *Orchestrator {
 	return &Orchestrator{
-		Registry: registry,
+		Registry:     registry,
 		TaskRegistry: taskRegistry,
 		HttpClient: &http.Client{
-			Timeout: 10 * time.Second, // Agent'lara istek atarken timeout
+			Timeout: 10 * time.Second,
 		},
 	}
 }
@@ -34,7 +33,7 @@ func NewOrchestrator(registry *AgentRegistry, taskRegistry *TaskRegistry) *Orche
 // LLM'den gelen task'i agent'lara yönlendirir
 func (o *Orchestrator) HandleTask(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	if r.Method != "POST" {
 		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
 		return
@@ -56,7 +55,7 @@ func (o *Orchestrator) HandleTask(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Görev alındı: Agent '%s', Endpoint: '%s'", agent.Name, agent.Endpoint)
 	agentReq, err := http.NewRequestWithContext(ctx, "POST", agent.Endpoint, bytes.NewBuffer(task.Arguments))
 	agentReq.Header.Set("Content-Type", "application/json")
-	
+
 	agentResp, err := o.HttpClient.Do(agentReq)
 	if err != nil {
 		log.Printf("Hata: Agent '%s' çağrılamadı: %v", agent.Name, err)
@@ -65,37 +64,27 @@ func (o *Orchestrator) HandleTask(w http.ResponseWriter, r *http.Request) {
 	}
 	defer agentResp.Body.Close()
 
-	// --- YENİ AKILLI MANTIK ---
-	
-	// Agent'ın döndüğü HTTP durum kodunu kontrol et
 	if agentResp.StatusCode == http.StatusAccepted {
-		// DURUM 1: ASENKRON GÖREV (Agent "202 Kabul Edildi" dedi)
-		
-		// Agent'tan gelen "Sipariş Fişi"ni (TaskStartResponse) oku
 		var startResp models.TaskStartResponse
+
 		if err := json.NewDecoder(agentResp.Body).Decode(&startResp); err != nil {
 			log.Printf("Hata: Agent'ın asenkron cevabı anlaşılamadı: %v", err)
 			http.Error(w, "Agent response parsing error", http.StatusInternalServerError)
 			return
 		}
 
-		// Görevi (Task ID ve Agent) "Görev Defteri"ne kaydet
 		if err := o.TaskRegistry.RegisterTask(startResp.TaskID, agent); err != nil {
 			log.Printf("Hata: TaskRegistry'ye kayıt yapılamadı: %v", err)
 			http.Error(w, "Task registration error", http.StatusInternalServerError)
 			return
 		}
 
-		// "Sipariş Fişi"ni (TaskStartResponse) Gateway'e geri yolla
 		log.Printf("Agent '%s' görevi kabul etti, TaskID: %s", agent.Name, startResp.TaskID)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted) // 202'yi Gateway'e de yansıt
+		w.WriteHeader(http.StatusAccepted)
 		json.NewEncoder(w).Encode(startResp)
 
-	} else {
-		// DURUM 2: SENKRON GÖREV (Slack Agent gibi, 200 OK veya Hata döndü)
-		
-		// Her zamanki gibi, cevabı olduğu gibi Gateway'e geri yolla (proxy)
+	} else { // Hata durumu
 		log.Printf("Agent '%s' senkron yanıt verdi: %s", agent.Name, agentResp.Status)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(agentResp.StatusCode)
@@ -107,13 +96,11 @@ func (o *Orchestrator) HandleTaskStatus(w http.ResponseWriter, r *http.Request) 
 
 	ctx := r.Context()
 
-
 	if r.Method != "GET" {
 		http.Error(w, "Only GET method is allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 1. URL'den Task ID'yi ayıkla (örn: "/task_status/abc-123" -> "abc-123")
 	taskID := strings.TrimPrefix(r.URL.Path, "/task_status/")
 	if taskID == "" {
 		http.Error(w, "Task ID eksik", http.StatusBadRequest)
@@ -121,7 +108,6 @@ func (o *Orchestrator) HandleTaskStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	log.Printf("Durum sorgusu alındı: TaskID: %s", taskID)
 
-	// 2. "Görev Defteri"ne bakarak bu task'in bilgilerini bul
 	taskInfo, ok := o.TaskRegistry.GetTaskInfo(taskID)
 	if !ok {
 		log.Printf("Hata: Bilinmeyen TaskID: %s", taskID)
@@ -129,8 +115,6 @@ func (o *Orchestrator) HandleTaskStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// 3. Agent'ın durum sorgulama adresini oluştur
-	// (örn: "http://localhost:8082/task_status/" + "abc-123")
 	fullStatusURL := taskInfo.AgentStatusBaseURL + taskID
 
 	agentReq, err := http.NewRequestWithContext(ctx, "GET", fullStatusURL, nil)
@@ -140,7 +124,6 @@ func (o *Orchestrator) HandleTaskStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// 4. İsteği ilgili Agent'a yönlendir (Proxy)
 	agentResp, err := o.HttpClient.Do(agentReq)
 	if err != nil {
 		log.Printf("Hata: Agent '%s' durum sorgulanamadı: %v", taskInfo.AgentName, err)
@@ -149,7 +132,6 @@ func (o *Orchestrator) HandleTaskStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	defer agentResp.Body.Close()
 
-	// 5. Agent'ın durum raporunu (TaskStatusResponse) Gateway'e geri yolla
 	log.Printf("Agent '%s' durum yanıtı verdi: %s", taskInfo.AgentName, agentResp.Status)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(agentResp.StatusCode)
@@ -176,19 +158,15 @@ func (o *Orchestrator) HandleTaskStop(w http.ResponseWriter, r *http.Request) {
 	}
 
 	taskID := strings.TrimPrefix(r.URL.Path, "/task_stop/")
-	
-	// Task bilgisini al
+
 	taskInfo, ok := o.TaskRegistry.GetTaskInfo(taskID)
 	if !ok {
 		http.Error(w, "Task not found in registry", http.StatusNotFound)
 		return
 	}
 
-	// ARTIK STRING REPLACE YOK! TEMİZ KOD:
-	// taskInfo.AgentStopBaseURL zaten "http://localhost:8082/task_stop/" şeklindedir.
 	fullStopURL := taskInfo.AgentStopBaseURL + taskID
 
-	// İsteği yönlendir
 	agentReq, _ := http.NewRequest("POST", fullStopURL, nil)
 	agentResp, err := o.HttpClient.Do(agentReq)
 	if err != nil {

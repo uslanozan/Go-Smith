@@ -17,7 +17,7 @@ func main() {
 
 	taskRegistry := NewTaskRegistry()
 
-	// 3. Orchestrator'ı (dağıtıcıyı) oluştur
+	// 3. Orchestrator'ı oluştur
 	orchestrator := NewOrchestrator(registry, taskRegistry)
 
 	// 4. HTTP sunucu ayarları

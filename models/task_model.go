@@ -17,9 +17,9 @@ type OrchestratorTaskRequest struct {
 type TaskStatus string
 
 const (
-	StatusPending   TaskStatus = "pending"   
-	StatusRunning   TaskStatus = "running"   
-	StatusCompleted TaskStatus = "completed" 
+	StatusPending   TaskStatus = "pending"
+	StatusRunning   TaskStatus = "running"
+	StatusCompleted TaskStatus = "completed"
 	StatusFailed    TaskStatus = "failed"
 )
 
@@ -31,10 +31,10 @@ type TaskStartResponse struct {
 
 // Bir görevin /task_status/:id endpoint'inden sorgulandığında döndürülecek "Durum Raporu"dur.
 type TaskStatusResponse struct {
-	TaskID  string          `json:"task_id"`
-	Status  TaskStatus      `json:"status"`
-	Result  json.RawMessage `json:"result,omitempty"` // İş bittiyse sonuç (örn: {"htmlLink": "..."})
-	Error   string          `json:"error,omitempty"`  // İş hata verdiyse hata mesajı
+	TaskID string          `json:"task_id"`
+	Status TaskStatus      `json:"status"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  string          `json:"error,omitempty"`
 }
 
 func (TaskStatus) JSONSchema() *jsonschema.Schema {

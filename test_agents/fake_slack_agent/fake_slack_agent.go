@@ -21,23 +21,20 @@ type SlackAgent struct {
 	// Veritabanı yerine geçen in-memory map
 	tasks map[string]map[string]interface{}
 
-	// Şemalar
+	// DTO Şemaları
 	requestSchema  *gojsonschema.Schema
 	responseSchema *gojsonschema.Schema
 }
 
-// Şemaları Yükle (Windows Uyumlu)
 func loadSchemas() (*gojsonschema.Schema, *gojsonschema.Schema) {
 	cwd, _ := os.Getwd()
-	// Proje yapına göre path'i ayarla (test_agents/fake_slack_agent olduğunu varsayıyoruz)
 	rawPath := filepath.Join(cwd, "..", "..", "schemas", "task_schema.json")
-	
+
 	absPath, err := filepath.Abs(rawPath)
 	if err != nil {
 		log.Fatalf("Dosya yolu hatası: %v", err)
 	}
 
-	// Windows Path Düzeltmesi (C:\ -> /C:/ ve \)
 	absPath = filepath.ToSlash(absPath)
 	if !strings.HasPrefix(absPath, "/") {
 		absPath = "/" + absPath
@@ -46,14 +43,12 @@ func loadSchemas() (*gojsonschema.Schema, *gojsonschema.Schema) {
 
 	log.Printf("📂 Şema Yolu: %s", schemaURI)
 
-	// Request Validator
 	reqLoader := gojsonschema.NewReferenceLoader(schemaURI + "#/$defs/OrchestratorTaskRequest")
 	reqSchema, err := gojsonschema.NewSchema(reqLoader)
 	if err != nil {
 		log.Fatalf("Request Schema yüklenemedi: %v", err)
 	}
 
-	// Response Validator
 	resLoader := gojsonschema.NewReferenceLoader(schemaURI + "#/$defs/TaskStatusResponse")
 	resSchema, err := gojsonschema.NewSchema(resLoader)
 	if err != nil {
@@ -84,29 +79,21 @@ func main() {
 	}
 }
 
-// --------------------------------------------------------------------------------
-// HANDLER: SEND MESSAGE
-// --------------------------------------------------------------------------------
 func (a *SlackAgent) handleSendMessage(w http.ResponseWriter, r *http.Request) {
-	// 1. Validasyon ve Parse (Ortak Helper Kullanılabilir ama açık yazıyorum)
 	bodyMap, err := a.validateRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// 2. Argümanları Al
 	args := bodyMap["arguments"].(map[string]interface{})
 	channelID, _ := args["channel_id"].(string)
 	text, _ := args["text"].(string)
 
-	// 3. Task Oluştur
 	taskID := uuid.NewString()
 
 	log.Printf("[Slack] Mesaj Gönderiliyor -> Kanal: %s, Mesaj: %s", channelID, text)
 
-	// 4. İŞLEMİ YAP (Fake olduğu için anında yapıp sonucu kaydediyoruz)
-	// Senkron bir iş olsa bile "Asenkron Protokol"e uyduruyoruz.
 	resultData := map[string]interface{}{
 		"ok":        true,
 		"status":    "mesaj iletildi",
@@ -114,22 +101,15 @@ func (a *SlackAgent) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		"channel":   channelID,
 	}
 
-	// Durumu direkt "Completed" olarak kaydediyoruz
 	a.saveTaskState(taskID, "completed", resultData, nil)
 
-	// 5. Cevap Dön (TaskStartResponse)
-	// Orchestrator bu cevabı alınca "Tamam iş başladı" diyecek ve hemen ardından /task_status soracak.
-	// Sorduğunda da yukarıda kaydettiğimiz "completed" sonucunu alacak.
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"task_id": taskID,
-		"status":  "pending", // Protokol gereği "başlattım" diyoruz.
+		"status":  "pending",
 	})
 }
 
-// --------------------------------------------------------------------------------
-// HANDLER: READ MESSAGES
-// --------------------------------------------------------------------------------
 func (a *SlackAgent) handleReadMessages(w http.ResponseWriter, r *http.Request) {
 	bodyMap, err := a.validateRequest(r)
 	if err != nil {
@@ -139,20 +119,17 @@ func (a *SlackAgent) handleReadMessages(w http.ResponseWriter, r *http.Request) 
 
 	args := bodyMap["arguments"].(map[string]interface{})
 	channelID, _ := args["channel_id"].(string)
-	// JSON'dan sayılar float64 olarak gelir
 	limitFloat, _ := args["limit"].(float64)
 	limit := int(limitFloat)
 
 	taskID := uuid.NewString()
 	log.Printf("[Slack] Mesajlar Okunuyor -> Kanal: %s, Limit: %d", channelID, limit)
 
-	// Fake Sonuç
 	fakeMessages := []map[string]string{
 		{"user": "ozan", "text": "Selamlar"},
 		{"user": "bot", "text": "Task tamamlandı"},
 	}
-	
-	// Limite göre kes (fake logic)
+
 	if limit > 0 && limit < len(fakeMessages) {
 		fakeMessages = fakeMessages[:limit]
 	}
@@ -163,7 +140,6 @@ func (a *SlackAgent) handleReadMessages(w http.ResponseWriter, r *http.Request) 
 		"count":    len(fakeMessages),
 	}
 
-	// Anında bitti olarak kaydet
 	a.saveTaskState(taskID, "completed", resultData, nil)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -173,13 +149,9 @@ func (a *SlackAgent) handleReadMessages(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// --------------------------------------------------------------------------------
-// ORTAK YARDIMCILAR
-// --------------------------------------------------------------------------------
-
 func (a *SlackAgent) handleStatus(w http.ResponseWriter, r *http.Request) {
 	taskID := strings.TrimPrefix(r.URL.Path, "/task_status/")
-	
+
 	a.tasksMu.RLock()
 	task, ok := a.tasks[taskID]
 	a.tasksMu.RUnlock()
@@ -193,7 +165,6 @@ func (a *SlackAgent) handleStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(task)
 }
 
-// İsteği okur, JSON map'e çevirir ve Şema ile doğrular
 func (a *SlackAgent) validateRequest(r *http.Request) (map[string]interface{}, error) {
 	var bodyMap map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&bodyMap); err != nil {
@@ -218,7 +189,6 @@ func (a *SlackAgent) validateRequest(r *http.Request) (map[string]interface{}, e
 	return bodyMap, nil
 }
 
-// Durumu kaydeder ve Response Schema ile doğruluğunu (log için) kontrol eder
 func (a *SlackAgent) saveTaskState(taskID, status string, result interface{}, errStr *string) {
 	a.tasksMu.Lock()
 	defer a.tasksMu.Unlock()
@@ -234,7 +204,6 @@ func (a *SlackAgent) saveTaskState(taskID, status string, result interface{}, er
 		statusObj["error"] = *errStr
 	}
 
-	// Response Schema Check (Debug amaçlı)
 	loader := gojsonschema.NewGoLoader(statusObj)
 	res, _ := a.responseSchema.Validate(loader)
 	if !res.Valid() {

@@ -3,9 +3,10 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"net/url"
 	"os"
 	"sync"
-	"net/url"
+
 	"github.com/uslanozan/Go-Smith/models"
 )
 
@@ -17,15 +18,14 @@ type AgentRegistry struct {
 
 type TaskRegistry struct {
 	mu    sync.RWMutex
-	tasks map[string]TaskInfo // Key: TaskID
+	tasks map[string]TaskInfo
 }
 
-// TaskInfo, bir görevin hangi agent'a ait olduğunu ve
-// durum sorgulama adresini saklar.
+// TaskInfo, bir görevin hangi agent'a ait olduğunu ve durum sorgulama adresini saklar.
 type TaskInfo struct {
 	AgentName          string
-	AgentStatusBaseURL string // Örn: http://localhost:8082/task_status/
-	AgentStopBaseURL   string // Örn: http://localhost:8082/task_stop/
+	AgentStatusBaseURL string
+	AgentStopBaseURL   string
 }
 
 // NewTaskRegistry, yeni, boş bir görev defteri oluşturur.
@@ -35,10 +35,7 @@ func NewTaskRegistry() *TaskRegistry {
 	}
 }
 
-// RegisterTask, yeni başlatılan bir asenkron görevi deftere kaydeder.
 func (r *TaskRegistry) RegisterTask(taskID string, agent models.AgentDefinition) error {
-	// Agent'ın ana "Endpoint" URL'sinden (http://.../create_event)
-	// temel URL'sini (http://localhost:8082) çıkarmalıyız.
 	base, err := url.Parse(agent.Endpoint)
 	if err != nil {
 		return err
@@ -61,7 +58,6 @@ func (r *TaskRegistry) RegisterTask(taskID string, agent models.AgentDefinition)
 	return nil
 }
 
-// GetTaskInfo, bir Task ID'ye karşılık gelen görev bilgilerini (sorgu URL'si) getirir.
 func (r *TaskRegistry) GetTaskInfo(taskID string) (TaskInfo, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -69,14 +65,12 @@ func (r *TaskRegistry) GetTaskInfo(taskID string) (TaskInfo, bool) {
 	return info, ok
 }
 
-// Yeni bir kayıt defteri registry oluşturur ve başlatır
 func NewAgentRegistry() *AgentRegistry {
 	return &AgentRegistry{
 		agents: make(map[string]models.AgentDefinition),
 	}
 }
 
-// Defterden agent'ın ismine göre arar, bulursa definition'ı döndürür
 func (r *AgentRegistry) Get(name string) (models.AgentDefinition, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -84,9 +78,6 @@ func (r *AgentRegistry) Get(name string) (models.AgentDefinition, bool) {
 	return agent, ok
 }
 
-
-// Endpointi gizleyerek LLM'e agent listesini bildirir
-// any = interface{} (tipini bilmediğimiz zamanlar)
 func (r *AgentRegistry) GetToolsSpec() []map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -94,14 +85,13 @@ func (r *AgentRegistry) GetToolsSpec() []map[string]any {
 	specs := make([]map[string]any, 0, len(r.agents))
 	for _, agent := range r.agents {
 		specs = append(specs, map[string]any{
-			"name":        agent.Name,  // String
-			"description": agent.Description,  // String
-			"schema":      agent.Schema,  // json.RawMessage
+			"name":        agent.Name,
+			"description": agent.Description,
+			"schema":      agent.Schema,
 		})
 	}
 	return specs
 }
-
 
 // Orchestrator ilk başladığında config/agents.json'ı okuyarak agent'ları deftere otomatik kaydeder
 func LoadAgentsFromConfig(registry *AgentRegistry, configFile string) error {
@@ -128,9 +118,8 @@ func LoadAgentsFromConfig(registry *AgentRegistry, configFile string) error {
 	return nil
 }
 
-// ---------------------- HELPER ----------------------
+// ---------------------- HELPERS ----------------------
 
-// Deftere yeni register kaydeder
 func (r *AgentRegistry) register(def models.AgentDefinition) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

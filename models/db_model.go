@@ -76,7 +76,7 @@ type AgentFunction struct {
 
 // Tablo: user_agent
 type UserAgent struct {
-	// SQL: INDEX fk_User_has_Agent_User1_idx 
+	// SQL: INDEX fk_User_has_Agent_User1_idx
 	// VE UNIQUE INDEX idx_user_agent_composite
 	UserID int32 `gorm:"primaryKey;column:user_id;not null;index:fk_User_has_Agent_User1_idx;index:idx_user_agent_composite,unique"`
 
@@ -95,14 +95,14 @@ type UserAgent struct {
 
 // Tablo: message
 type Message struct {
-	ID            int32          `gorm:"primaryKey;column:id;autoIncrement;not null"`
-	Role          string         `gorm:"column:role;type:varchar(45);not null"`
-	Content       string         `gorm:"column:content;type:longtext"`
-	ToolCallsJSON []byte         `gorm:"column:tool_calls;type:json"`
+	ID            int32  `gorm:"primaryKey;column:id;autoIncrement;not null"`
+	Role          string `gorm:"column:role;type:varchar(45);not null"`
+	Content       string `gorm:"column:content;type:longtext"`
+	ToolCallsJSON []byte `gorm:"column:tool_calls;type:json"`
 
 	// SQL: INDEX idx_message_created_at
-	CreatedAt time.Time      `gorm:"column:created_at;type:datetime;index:idx_message_created_at"`
-	UpdatedAt time.Time      `gorm:"column:updated_at;type:datetime"`
+	CreatedAt time.Time `gorm:"column:created_at;type:datetime;index:idx_message_created_at"`
+	UpdatedAt time.Time `gorm:"column:updated_at;type:datetime"`
 
 	// SQL: INDEX idx_message_deleted_at
 	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at;index:idx_message_deleted_at"`
