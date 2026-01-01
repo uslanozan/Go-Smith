@@ -98,21 +98,13 @@ go run scripts/generate_schema.go
     
 *   g++ / C++ Compiler (**Optional**, for running the C++ agent)
 
+
 ### Step 0: Install Ollama and a Tool Calling Model
 
-Go-Smith relies on a local LLM to understand user intents and route tasks. We heavily recommend **Qwen 2.5** (or Llama 3.1) for its superior tool-calling capabilities.
+Go-Smith relies on a local LLM to understand user intents and route tasks. I heavily recommend **Qwen 2.5** (or Llama 3.1) for its superior tool-calling capabilities.
 
 1.  **Download Ollama** from [ollama.com](https://ollama.com).
 2.  **Pull the Model:** Open your terminal and run the following command to download and serve the model:
-
-```bash
-ollama run qwen2.5:3b-instruct # I used qwen2.5:3b-instruct 
-```   
-
-```bash
-git clone https://github.com/uslanozan/Go-Smith.git
-cd Go-Smith
-```    
 
 **Note:** Ensure Ollama is running in the background (http://localhost:11434) before starting Go-Smith.
 
@@ -123,7 +115,17 @@ git clone https://github.com/uslanozan/Go-Smith.git
 cd Go-Smith
 ```
 
-### Step 2: Spin Up the Agents
+### Step 2: Configuration
+
+Create your environment configuration file from the example provided. This file configures the database, LLM settings, and API keys.
+
+```bash
+cp .env.example .env
+```
+
+_(You can keep the default settings for the demo, or edit .env to match your custom setup.)_
+
+### Step 3: Spin Up the Agents
 
 Start the test agents in separate terminals to simulate a distributed environment:
 
@@ -134,7 +136,7 @@ cd test_agents/async_test_agent
 go run async_test_agent.go
 ```
 
-### Step 3: Start Go-Smith
+### Step 4: Start Go-Smith
 
 Run the orchestrator from the root directory:
 
@@ -146,10 +148,10 @@ go run .
 Go-Smith is now online at http://localhost:8080
 
 
-🧪 Usage Examples
+🧪 Usage Examples (Go-Smith + Agents)
 -----------------
 
-You can test the system using Postman or cURL.
+You can test the system by mimicking the Backend and Ollama response using Postman or cURL.
 
 ### 1\. Mock PDF Converter (Go Agent)
 
@@ -168,10 +170,8 @@ You can test the system using Postman or cURL.
 
 ```json
 {
-    "task_id": "go-task-90210",
-    "status": "accepted",
-    "message": "Conversion started asynchronously.",
-    "status_endpoint": "/task_status/go-task-90210"
+    "task_id": "go-task-75111",
+    "status": "running"
 }
 ```
 
@@ -179,7 +179,7 @@ You can test the system using Postman or cURL.
 
 Once an async task involves a waiting period, you can poll the status endpoint provided in the previous response.
 
-**Request (GET http://localhost:8080/task_status/go-task-90210):**
+**Request (GET http://localhost:8080/task_status/go-task-75111):**
 
 (No body required)
 
@@ -187,10 +187,9 @@ Once an async task involves a waiting period, you can poll the status endpoint p
 
 ```json
 {
-    "task_id": "go-task-90210",
-    "status": "processing",
-    "progress": "45%",
-    "details": "Rendering pages..."
+    "task_id": "go-task-75111",
+    "status": "running",
+    "result": "PDF conversion started..."
 }
 ```
 
@@ -198,9 +197,12 @@ Once an async task involves a waiting period, you can poll the status endpoint p
 
 ```json
 {
-    "task_id": "go-task-90210",
+    "task_id": "go-task-75111",
     "status": "completed",
-    "download_url": "https://cdn.gosmith.local/reports/annual_report_2024.pdf"
+    "result": {
+        "download_url": "https://cdn.gosmith.local/annual_report_2024.txt.pdf",
+        "message": "Conversion successful"
+    }
 }
 ```
 
@@ -222,17 +224,24 @@ If the task is taking too long or is no longer needed, you can send a stop signa
 ```
 
 
-🌟 Optional: Run the Full Stack (Gateway + DB + Agents)
+🌟 Optional: Run the Full Stack (Go-Smith + Ollama + Gateway + DB + Agents)
 -----------------
 
-Want to see how Go-Smith fits into a real-world application? I provided a **complete backend simulation** in the `examples/` folder.
+Want to see how Go-Smith fits into a real-world application? We provided a **complete backend simulation** in the `examples/` folder. unlike the manual tests above, this setup involves the **Real LLM (Ollama)** making decisions.
 
 This demo includes:
+* **Ollama(Port 11434):** An instruct LLM (e.g., Qwen 2.5) that acts as the "Brain", generating tool calls based on natural language. LLM decides whether the prompt is a chat prompt or task prompt (if it's a task, decides which tool will be using)
 * **Gateway (Port 8000):** A Go Fiber/HTTP server simulating a real backend.
 * **Database:** A zero-config **MySQL** database to store chat history and users.
 * **Auth:** Simple API Key authentication.
 
-### 1. Start the Gateway (The "Client")
+### 1. Start the Ollama (Terminal 1)
+
+```bash
+ollama run qwen2.5:3b-instruct
+```
+
+### 2. Start the Gateway (Terminal 2)
 Instead of calling the Orchestrator directly, let's talk to the Gateway.
 
 ```bash
@@ -240,7 +249,7 @@ cd examples/simple_backend_demo
 go run . # Gateway is listening on http://localhost:8000
 ```
 
-### 1. Start the C++ Agent (The "Heavy Lifter")
+### 3. Start the C++ Agent (Terminal 3)
 
 To demonstrate Go-Smith's ability to manage low-level languages, let's spin up the C++ Math Agent.
 
@@ -252,7 +261,16 @@ g++ -o math_agent main.cpp
 ./math_agent # C++ Agent is listening on http://localhost:8084
 ```
 
-### 3\. End-to-End Test (The "Magic")
+### 4. Start the Go-Smith (Terminal 4)
+
+Run the orchestrator from the root directory.
+
+```bash
+go run .
+```
+
+
+### 5\. End-to-End Test
 
 Now, send a natural language prompt to the **Gateway**. The Gateway will ask Ollama, Ollama will choose the tool, and Go-Smith will route it to the C++ Agent.
 
@@ -290,13 +308,13 @@ curl -X POST http://localhost:8000/chat \
 
 6.  **Execution:** The C++ binary performs the computation (squaring the number) and returns the result.
 
-7.  **Response:** The Gateway persists the interaction (User Prompt + Assistant Response) to **SQLite** and delivers the final answer to the client.
+7.  **Response:** The Gateway persists the interaction (User Prompt + Assistant Response) to **MySQL** and delivers the final answer to the client.
 
 
 🔮 Future Work & Roadmap
 -----------------
 
-We are actively working on making Go-Smith more robust and scalable. Here is what's coming next:
+I am actively working on making Go-Smith more robust and scalable. Here is what's coming next:
 
 *   **🐳 Docker & Docker Compose Support:** A one-click setup to spin up the Orchestrator, Gateway, MySQL, and all Agents in isolated containers.
     
