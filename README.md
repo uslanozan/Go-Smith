@@ -101,10 +101,14 @@ go run scripts/generate_schema.go
 
 ### Step 0: Install Ollama and a Tool Calling Model
 
-Go-Smith relies on a local LLM to understand user intents and route tasks. I heavily recommend **Qwen 2.5** (or Llama 3.1) for its superior tool-calling capabilities.
+Go-Smith relies on a local LLM to understand user intents and route tasks. I heavily recommend **qwen2.5:3b-instruct** (or llama3.2:3b-instruct-q4_K_M) for its superior tool-calling capabilities.
 
 1.  **Download Ollama** from [ollama.com](https://ollama.com).
 2.  **Pull the Model:** Open your terminal and run the following command to download and serve the model:
+
+```bash
+ollama pull qwen2.5:3b-instruct
+```
 
 **Note:** Ensure Ollama is running in the background (http://localhost:11434) before starting Go-Smith.
 
@@ -210,7 +214,7 @@ Once an async task involves a waiting period, you can poll the status endpoint p
 
 If the task is taking too long or is no longer needed, you can send a stop signal. The Orchestrator routes this to the correct agent's stop endpoint.
 
-**Request (POST http://localhost:8080/task_stop/go-task-90210):**
+**Request (POST http://localhost:8080/task_stop/go-task-75111):**
 
 (No body required)
 
@@ -227,7 +231,7 @@ If the task is taking too long or is no longer needed, you can send a stop signa
 🌟 Optional: Run the Full Stack (Go-Smith + Ollama + Gateway + DB + Agents)
 -----------------
 
-Want to see how Go-Smith fits into a real-world application? We provided a **complete backend simulation** in the `examples/` folder. unlike the manual tests above, this setup involves the **Real LLM (Ollama)** making decisions.
+Want to see how Go-Smith fits into a real-world application? We provided a **complete backend simulation** in the `examples/` folder. Unlike the manual tests above, this setup involves the **Real LLM (Ollama)** making decisions.
 
 This demo includes:
 * **Ollama(Port 11434):** An instruct LLM (e.g., Qwen 2.5) that acts as the "Brain", generating tool calls based on natural language. LLM decides whether the prompt is a chat prompt or task prompt (if it's a task, decides which tool will be using)
