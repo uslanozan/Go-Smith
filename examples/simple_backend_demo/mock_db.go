@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/uslanozan/Go-Smith/models"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -56,11 +55,11 @@ func InitDB() (*gorm.DB, error) {
 	if os.Getenv("DB_AUTO_MIGRATE") == "true" {
 		log.Println("🔄 AutoMigrate çalıştırılıyor...")
 		err = db.AutoMigrate(
-			&models.User{},
-			&models.Agent{},
-			&models.UserAgent{},
-			&models.AgentFunction{},
-			&models.Message{},
+			&User{},
+			&Agent{},
+			&UserAgent{},
+			&AgentFunction{},
+			&Message{},
 		)
 		if err != nil {
 			return nil, fmt.Errorf("tablo oluşturma hatası: %v", err)
@@ -70,11 +69,11 @@ func InitDB() (*gorm.DB, error) {
 		log.Println("ℹ️ AutoMigrate atlandı (DB_AUTO_MIGRATE != true).")
 	}
 
-	if db.Migrator().HasTable(&models.User{}) {
+	if db.Migrator().HasTable(&User{}) {
 		var count int64
-		db.Model(&models.User{}).Where("api_key = ?", "demo-token-123").Count(&count)
+		db.Model(&User{}).Where("api_key = ?", "demo-token-123").Count(&count)
 		if count == 0 {
-			demoUser := models.User{
+			demoUser := User{
 				Username: "demo_user",
 				APIKey:   "demo-token-123",
 			}

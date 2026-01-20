@@ -1,6 +1,6 @@
 // Dosya: models/db_models.go
 
-package models
+package main
 
 import (
 	"time"

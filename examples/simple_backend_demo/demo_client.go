@@ -91,12 +91,12 @@ func (g *Gateway) getToolsFromOrchestrator(ctx context.Context) ([]models.ToolSp
 	return tools, nil
 }
 
-func convertToolsForOllama(tools []models.ToolSpec) []models.OllamaTool {
-	ollamaTools := make([]models.OllamaTool, len(tools))
+func convertToolsForOllama(tools []models.ToolSpec) []OllamaTool {
+	ollamaTools := make([]OllamaTool, len(tools))
 	for i, tool := range tools {
-		ollamaTools[i] = models.OllamaTool{
+		ollamaTools[i] = OllamaTool{
 			Type: "function",
-			Function: models.OllamaFunction{
+			Function: OllamaFunction{
 				Name:        tool.Name,
 				Description: tool.Description,
 				Parameters:  tool.Schema,
@@ -106,7 +106,7 @@ func convertToolsForOllama(tools []models.ToolSpec) []models.OllamaTool {
 	return ollamaTools
 }
 
-func (g *Gateway) callOrchestrator(ctx context.Context, toolCall models.OllamaToolCall) (json.RawMessage, int, error) {
+func (g *Gateway) callOrchestrator(ctx context.Context, toolCall OllamaToolCall) (json.RawMessage, int, error) {
 	log.Printf("[Gateway] Ollama'dan gelen tool call Orchestrator'a yönlendiriliyor: %s", toolCall.Function.Name)
 
 	rawArgs := json.RawMessage(toolCall.Function.Arguments)
@@ -147,7 +147,7 @@ func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
 	token := strings.TrimPrefix(authHeader, "Bearer ")
 
-	var user models.User
+	var user User
 
 	if result := g.DB.Where("api_key = ?", token).First(&user); result.Error != nil {
 		http.Error(w, "Invalid API Key", http.StatusUnauthorized)
@@ -164,7 +164,7 @@ func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
 	tools, _ := g.getToolsFromOrchestrator(ctx)
 	ollamaTools := convertToolsForOllama(tools)
 
-	var dbHistory []models.Message
+	var dbHistory []Message
 
 	limit := 20
 	g.DB.Where("user_id = ?", user.ID).
@@ -177,21 +177,21 @@ func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
 		dbHistory[i], dbHistory[j] = dbHistory[j], dbHistory[i]
 	}
 
-	var messagesForOllama []models.OllamaMessage
+	var messagesForOllama []OllamaMessage
 	systemPrompt := `You are "Silka", an AI assistant created by Ozan Uslan. Your primary goal is to be helpful and conversational. You MUST ONLY use tools when the user explicitly asks for a specific action.`
-	messagesForOllama = append(messagesForOllama, models.OllamaMessage{Role: "system", Content: systemPrompt})
+	messagesForOllama = append(messagesForOllama, OllamaMessage{Role: "system", Content: systemPrompt})
 
 	for _, msg := range dbHistory {
-		var toolCalls []models.OllamaToolCall
+		var toolCalls []OllamaToolCall
 		if len(msg.ToolCallsJSON) > 0 {
 			json.Unmarshal(msg.ToolCallsJSON, &toolCalls)
 		}
-		messagesForOllama = append(messagesForOllama, models.OllamaMessage{Role: msg.Role, Content: msg.Content, ToolCalls: toolCalls})
+		messagesForOllama = append(messagesForOllama, OllamaMessage{Role: msg.Role, Content: msg.Content, ToolCalls: toolCalls})
 	}
 
-	messagesForOllama = append(messagesForOllama, models.OllamaMessage{Role: "user", Content: chatReq.Prompt})
+	messagesForOllama = append(messagesForOllama, OllamaMessage{Role: "user", Content: chatReq.Prompt})
 
-	ollamaReq := models.OllamaChatRequest{
+	ollamaReq := OllamaChatRequest{
 		Model: g.Config.OllamaModel, Messages: messagesForOllama, Tools: ollamaTools, Stream: false, KeepAlive: "1h",
 	}
 	reqBody, _ := json.Marshal(ollamaReq)
@@ -201,15 +201,15 @@ func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	var ollamaResp models.OllamaChatResponse
+	var ollamaResp OllamaChatResponse
 	json.Unmarshal(bodyBytes, &ollamaResp)
 
-	g.DB.Create(&models.Message{UserID: user.ID, Role: "user", Content: chatReq.Prompt})
+	g.DB.Create(&Message{UserID: user.ID, Role: "user", Content: chatReq.Prompt})
 
 	if len(ollamaResp.Message.ToolCalls) > 0 {
 		toolCalls := ollamaResp.Message.ToolCalls
 		tcJSON, _ := json.Marshal(toolCalls)
-		g.DB.Create(&models.Message{UserID: user.ID, Role: "assistant", ToolCallsJSON: tcJSON})
+		g.DB.Create(&Message{UserID: user.ID, Role: "assistant", ToolCallsJSON: tcJSON})
 
 		res, status, _ := g.callOrchestrator(ctx, toolCalls[0])
 		w.Header().Set("Content-Type", "application/json")
@@ -217,7 +217,7 @@ func (g *Gateway) chatHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write(res)
 	} else {
 		content := ollamaResp.Message.Content
-		g.DB.Create(&models.Message{UserID: user.ID, Role: "assistant", Content: content})
+		g.DB.Create(&Message{UserID: user.ID, Role: "assistant", Content: content})
 
 		resMap := map[string]string{"response": content}
 		resBytes, _ := json.Marshal(resMap)
