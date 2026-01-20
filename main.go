@@ -22,10 +22,10 @@ func main() {
 
 	// 4. HTTP sunucu ayarları
 	mux := http.NewServeMux()
-	mux.HandleFunc("/tools", orchestrator.HandleGetTools)
-	mux.HandleFunc("/run_task", orchestrator.HandleTask)
-	mux.HandleFunc("/task_status/", orchestrator.HandleTaskStatus)
-	mux.HandleFunc("/task_stop/", orchestrator.HandleTaskStop)
+	mux.HandleFunc("/api/v1/tools", orchestrator.HandleGetTools)
+	mux.HandleFunc("/api/v1/run_task", orchestrator.HandleTask)
+	mux.HandleFunc("/api/v1/task_status/", orchestrator.HandleTaskStatus)
+	mux.HandleFunc("/api/v1/task_stop/", orchestrator.HandleTaskStop)
 
 	log.Println("Go Orchestrator sunucusu http://localhost:8080 adresinde başlatılıyor...")
 
