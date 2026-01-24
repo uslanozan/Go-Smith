@@ -27,8 +27,6 @@ func main() {
 	mux.HandleFunc("/api/v1/task_status/", orchestrator.HandleTaskStatus)
 	mux.HandleFunc("/api/v1/task_stop/", orchestrator.HandleTaskStop)
 
-	log.Println("Go Orchestrator sunucusu http://localhost:8080 adresinde başlatılıyor...")
-
 	// 5. Sunucuyu başlat
 	if err := http.ListenAndServe(":8080", mux); err != nil {
 		log.Fatalf("Sunucu başlatılamadı: %v", err)

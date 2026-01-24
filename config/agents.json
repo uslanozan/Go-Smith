@@ -29,34 +29,31 @@
     "status_endpoint_path": "/task_status/",
     "stop_endpoint_path": "/task_stop/"
   },
-  {
+   {
     "name": "create_calendar_event",
     "description": "Creates a new event in the user's primary Google Calendar.",
+    "endpoint": "http://host.docker.internal:8082/execute",
+    "status_endpoint_path": "/task_status/",
+    "stop_endpoint_path": "/task_stop/",
+    "method": "POST",
     "schema": {
       "type": "object",
       "properties": {
         "summary": {
           "type": "string",
-          "description": "The title of the event, e.g., 'Meeting with Ozan'"
-        },
-        "description": {
-          "type": "string",
-          "description": "Optional details about the event."
+          "description": "Event title"
         },
         "start_time": {
           "type": "string",
-          "description": "Start date and time in ISO RFC3339 format, e.g., '2025-11-06T14:00:00+03:00'"
+          "description": "Start time in RFC3339 format"
         },
         "end_time": {
           "type": "string",
-          "description": "End date and time in ISO RFC3339 format, e.g., '2025-11-06T15:00:00+03:00'"
+          "description": "End time in RFC3339 format"
         }
       },
       "required": ["summary", "start_time", "end_time"]
-    },
-    "endpoint": "http://localhost:8082/execute", 
-    "status_endpoint_path": "/task_status/",
-    "stop_endpoint_path": "/task_stop/"
+    }
   },
   {
     "name": "pdf_converter",

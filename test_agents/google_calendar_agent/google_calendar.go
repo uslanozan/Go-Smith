@@ -117,6 +117,15 @@ func (a *CalendarAgent) handleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if _, ok := bodyMap["agent_name"]; !ok {
+		// Gelen veriyi "arguments" içine taşıyoruz
+		newBody := map[string]interface{}{
+			"agent_name": "create_calendar_event", // Adını biz koyalım
+			"arguments":  bodyMap,                 // Gelen her şeyi argüman say
+		}
+		bodyMap = newBody
+	}
+
 	loader := gojsonschema.NewGoLoader(bodyMap)
 	result, err := a.requestSchema.Validate(loader)
 	if err != nil {
