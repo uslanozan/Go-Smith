@@ -51,7 +51,7 @@ func NewGatewayConfig() (*GatewayConfig, error) {
 	return &GatewayConfig{
 		OllamaURL:              os.Getenv("OLLAMA_URL"),
 		OrchestratorToolsURL:   os.Getenv("ORCHESTRATOR_TOOLS_URL"),
-		OrchestratorRunTaskURL: os.Getenv("ORCHESTRATOR_RUN_TASK_URL"),
+		OrchestratorRunTaskURL: os.Getenv("BACKEND_RUN_TASK_URL"),
 		OllamaModel:            os.Getenv("OLLAMA_MODEL"),
 		HttpClientTimeout:      time.Duration(timeout) * time.Second,
 		ListenAddress:          listenAddr,
