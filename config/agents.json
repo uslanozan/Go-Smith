@@ -1,109 +1,141 @@
 [
   {
-    "name": "slack_send_message",
-    "description": "Sends a new message to a specific Slack user or channel.",
-    "schema": {
-      "type": "object",
-      "properties": {
-        "channel_id": {"type": "string"},
-        "text":       {"type": "string"}
-      },
-      "required": ["channel_id", "text"]
-    },
-    "endpoint": "http://localhost:8081/send_message",
-    "status_endpoint_path": "/task_status/",
-    "stop_endpoint_path": "/task_stop/"
-  },
-  {
-    "name": "slack_read_messages",
-    "description": "Reads the last N messages from a specific Slack channel.",
-    "schema": {
-      "type": "object",
-      "properties": {
-        "channel_id": {"type": "string"},
-        "limit":      {"type": "integer", "minimum": 1, "default": 10}
-      },
-      "required": ["channel_id"]
-    },
-    "endpoint": "http://localhost:8081/read_messages",
-    "status_endpoint_path": "/task_status/",
-    "stop_endpoint_path": "/task_stop/"
-  },
-   {
-    "name": "create_calendar_event",
-    "description": "Creates a new event in the user's primary Google Calendar.",
-    "endpoint": "http://host.docker.internal:8082/execute",
+    "name": "slack_agent",
+    "description": "Slack çalışma alanıyla etkileşime girer (Mesaj okuma ve gönderme).",
+    "endpoint": "http://localhost:8081",
     "status_endpoint_path": "/task_status/",
     "stop_endpoint_path": "/task_stop/",
-    "method": "POST",
-    "schema": {
-      "type": "object",
-      "properties": {
-        "summary": {
-          "type": "string",
-          "description": "Event title"
-        },
-        "start_time": {
-          "type": "string",
-          "description": "Start time in RFC3339 format"
-        },
-        "end_time": {
-          "type": "string",
-          "description": "End time in RFC3339 format"
+    "functions": [
+      {
+        "function_name": "slack_send_message",
+        "description": "Sends a new message to a specific Slack user or channel.",
+        "api_path": "/send_message",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "channel_id": {"type": "string"},
+            "text":       {"type": "string"}
+          },
+          "required": ["channel_id", "text"]
         }
       },
-      "required": ["summary", "start_time", "end_time"]
-    }
+      {
+        "function_name": "slack_read_messages",
+        "description": "Reads the last N messages from a specific Slack channel.",
+        "api_path": "/read_messages",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "channel_id": {"type": "string"},
+            "limit":      {"type": "integer", "minimum": 1, "default": 10}
+          },
+          "required": ["channel_id"]
+        }
+      }
+    ]
   },
   {
-    "name": "pdf_converter",
-    "description": "Simulates converting a text file to PDF format asynchronously.",
-    "schema": {
-      "type": "object",
-      "properties": {
-        "file_name": {
-          "type": "string",
-          "description": "The name of the file to convert, e.g., 'report.txt'"
-        }
-      },
-      "required": ["file_name"]
-    },
-    "endpoint": "http://localhost:8083/execute",
+    "name": "google_calendar_agent",
+    "description": "Google Takvim üzerinde işlem yapar.",
+    "endpoint": "http://host.docker.internal:8082",
     "status_endpoint_path": "/task_status/",
-    "stop_endpoint_path": "/task_stop/"
+    "stop_endpoint_path": "/task_stop/",
+    "functions": [
+      {
+        "function_name": "create_calendar_event",
+        "description": "Creates a new event in the user's primary Google Calendar.",
+        "api_path": "/execute",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string",
+              "description": "Event title"
+            },
+            "start_time": {
+              "type": "string",
+              "description": "Start time in RFC3339 format"
+            },
+            "end_time": {
+              "type": "string",
+              "description": "End time in RFC3339 format"
+            }
+          },
+          "required": ["summary", "start_time", "end_time"]
+        }
+      }
+    ]
   },
   {
-    "name": "finance_analysis",
-    "description": "Retrieves current price information for a specific cryptocurrency (e.g., BTC, ETH) or fiat currency.",
-    "schema": {
-      "type": "object",
-      "properties": {
-        "currency": {
-          "type": "string",
-          "description": "The currency symbol to check, e.g., 'BTC', 'ETH', 'USD'"
-        }
-      },
-      "required": ["currency"]
-    },
-    "endpoint": "http://localhost:8001/execute",
+    "name": "pdf_converter_agent",
+    "description": "Metin dosyalarını asenkron olarak PDF formatına dönüştürür.",
+    "endpoint": "http://localhost:8083",
     "status_endpoint_path": "/task_status/",
-    "stop_endpoint_path": "/task_stop/"
+    "stop_endpoint_path": "/task_stop/",
+    "functions": [
+      {
+        "function_name": "pdf_converter",
+        "description": "Simulates converting a text file to PDF format asynchronously.",
+        "api_path": "/execute",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "file_name": {
+              "type": "string",
+              "description": "The name of the file to convert, e.g., 'report.txt'"
+            }
+          },
+          "required": ["file_name"]
+        }
+      }
+    ]
   },
   {
-    "name": "heavy_math_calculation",
-    "description": "Performs complex mathematical calculations (square and cube) on a given number.",
-    "schema": {
-      "type": "object",
-      "properties": {
-        "number": {
-          "type": "integer",
-          "description": "The number to process."
-        }
-      },
-      "required": ["number"]
-    },
-    "endpoint": "http://localhost:8084/execute",
+    "name": "finance_agent",
+    "description": "Kripto para ve finansal verileri çeker.",
+    "endpoint": "http://localhost:8001",
     "status_endpoint_path": "/task_status/",
-    "stop_endpoint_path": "/task_stop/"
+    "stop_endpoint_path": "/task_stop/",
+    "functions": [
+      {
+        "function_name": "finance_analysis",
+        "description": "Retrieves current price information for a specific cryptocurrency (e.g., BTC, ETH) or fiat currency.",
+        "api_path": "/execute",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "currency": {
+              "type": "string",
+              "description": "The currency symbol to check, e.g., 'BTC', 'ETH', 'USD'"
+            }
+          },
+          "required": ["currency"]
+        }
+      }
+    ]
+  },
+  {
+    "name": "math_agent",
+    "description": "Ağır matematiksel hesaplamaları (kare, küp alma vs.) yapar.",
+    "endpoint": "http://localhost:8084",
+    "status_endpoint_path": "/task_status/",
+    "stop_endpoint_path": "/task_stop/",
+    "functions": [
+      {
+        "function_name": "heavy_math_calculation",
+        "description": "Performs complex mathematical calculations (square and cube) on a given number.",
+        "api_path": "/execute",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "number": {
+              "type": "integer",
+              "description": "The number to process."
+            }
+          },
+          "required": ["number"]
+        }
+      }
+    ]
   }
 ]

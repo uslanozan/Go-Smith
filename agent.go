@@ -76,17 +76,20 @@ func (r *AgentRegistry) Get(name string) (models.AgentDefinition, bool) {
 	return agent, ok
 }
 
+// 🔥 GÜNCELLENDİ: Artık Ajanları değil, Ajanların altındaki Fonksiyonları listeliyor
 func (r *AgentRegistry) GetToolsSpec() []map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	specs := make([]map[string]any, 0, len(r.agents))
+	var specs []map[string]any
 	for _, agent := range r.agents {
-		specs = append(specs, map[string]any{
-			"name":        agent.Name,
-			"description": agent.Description,
-			"schema":      agent.Schema,
-		})
+		for _, f := range agent.Functions {
+			specs = append(specs, map[string]any{
+				"name":        f.FunctionName,
+				"description": f.Description,
+				"schema":      f.Schema,
+			})
+		}
 	}
 	return specs
 }
@@ -105,9 +108,8 @@ func (r *AgentRegistry) clear() {
 
 // ---------------------- LOADERS ----------------------
 
-// LoadAgents: Ortam değişkenine göre API veya Dosya üzerinden yükleme yapar
 func LoadAgents(registry *AgentRegistry) error {
-	source := os.Getenv("AGENT_SOURCE") // "http" ise API'ye gider
+	source := os.Getenv("AGENT_SOURCE")
 	backendURL := os.Getenv("BACKEND_AGENTS_URL")
 
 	if source == "http" && backendURL != "" {
@@ -142,7 +144,7 @@ func LoadAgentsFromConfig(registry *AgentRegistry, configFile string) error {
 	return nil
 }
 
-// LoadAgentsFromAPI: Silka Backend'den (snake_case) verileri çeker ve AgentDefinition'a mapler
+// 🔥 GÜNCELLENDİ: Silka-Backend'den gelen yeni Hiyerarşik JSON yapısını karşılayacak şekilde değiştirildi
 func LoadAgentsFromAPI(registry *AgentRegistry, url string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
@@ -151,15 +153,22 @@ func LoadAgentsFromAPI(registry *AgentRegistry, url string) error {
 	}
 	defer resp.Body.Close()
 
-	// Silka-Backend'den gelen ham yapıyı karşılamak için yerel bir tip (Mapping için)
+	// İç içe JSON yapısını karşılayacak yerel struct'lar
+	type apiFunction struct {
+		FunctionName        string          `json:"function_name"`
+		FunctionDescription string          `json:"function_description"`
+		APIPath             string          `json:"api_path"`
+		SchemaJSON          json.RawMessage `json:"schema_json"`
+	}
+
 	type apiAgent struct {
-		AgentName      string          `json:"agent_name"`
-		Description    string          `json:"description"`
-		Endpoint       string          `json:"endpoint"`
-		StopEndpoint   string          `json:"stop_endpoint"`
-		StatusEndpoint string          `json:"status_endpoint"`
-		SchemaJSON     json.RawMessage `json:"schema_json"`
-		Status         int             `json:"status"`
+		AgentName      string        `json:"agent_name"`
+		Description    string        `json:"description"`
+		Endpoint       string        `json:"endpoint"`
+		StopEndpoint   string        `json:"stop_endpoint"`
+		StatusEndpoint string        `json:"status_endpoint"`
+		Status         int           `json:"status"`
+		Functions      []apiFunction `json:"functions"` // 🔥 Yeni eklenen dizi
 	}
 
 	var dbAgents []apiAgent
@@ -167,11 +176,23 @@ func LoadAgentsFromAPI(registry *AgentRegistry, url string) error {
 		return err
 	}
 
-	registry.clear() // Refresh sırasında mükerrer kayıt olmaması için
+	registry.clear()
 	count := 0
+
 	for _, da := range dbAgents {
 		if da.Status == 0 {
 			continue
+		}
+
+		// API'den gelen fonksiyonları Go-Smith modeline dönüştür (Map işlemi)
+		var mappedFuncs []models.AgentFunction
+		for _, f := range da.Functions {
+			mappedFuncs = append(mappedFuncs, models.AgentFunction{
+				FunctionName: f.FunctionName,
+				Description:  f.FunctionDescription,
+				APIPath:      f.APIPath,
+				Schema:       f.SchemaJSON,
+			})
 		}
 
 		// API verisini AgentDefinition modeline mapliyoruz
@@ -181,7 +202,7 @@ func LoadAgentsFromAPI(registry *AgentRegistry, url string) error {
 			Endpoint:           da.Endpoint,
 			StatusEndpointPath: da.StatusEndpoint,
 			StopEndpointPath:   da.StopEndpoint,
-			Schema:             da.SchemaJSON,
+			Functions:          mappedFuncs, // 🔥 Maplediğimiz fonksiyonları atıyoruz
 		}
 
 		// Varsayılan path'leri kontrol et
@@ -198,4 +219,19 @@ func LoadAgentsFromAPI(registry *AgentRegistry, url string) error {
 
 	log.Printf("🌐 API üzerinden %d agent başarıyla yüklendi.", count)
 	return nil
+}
+
+// İstenen fonksiyonun hangi ajana ait olduğunu bulur
+func (r *AgentRegistry) GetByFunction(functionName string) (models.AgentDefinition, models.AgentFunction, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, agent := range r.agents {
+		for _, f := range agent.Functions {
+			if f.FunctionName == functionName {
+				return agent, f, true
+			}
+		}
+	}
+	return models.AgentDefinition{}, models.AgentFunction{}, false
 }

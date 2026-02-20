@@ -6,12 +6,15 @@
         "agent_name": {
           "type": "string"
         },
+        "function_name": {
+          "type": "string"
+        },
         "arguments": true
       },
       "additionalProperties": false,
       "type": "object",
       "required": [
-        "agent_name",
+        "function_name",
         "arguments"
       ]
     },

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -45,15 +46,21 @@ func (o *Orchestrator) HandleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent, ok := o.Registry.Get(task.AgentName)
+	// 🔥 YENİ: Ajanı isimle değil, fonksiyonu kimin yapabildiğine bakarak buluyoruz
+	agent, functionDef, ok := o.Registry.GetByFunction(task.FunctionName)
 	if !ok {
-		log.Printf("Hata: Bilinmeyen agent istendi: %s", task.AgentName)
-		http.Error(w, "Agent not found", http.StatusNotFound)
+		log.Printf("Hata: Sistemde '%s' yeteneğine sahip bir ajan bulunamadı.", task.FunctionName)
+		http.Error(w, "Function/Agent not found", http.StatusNotFound)
 		return
 	}
 
-	log.Printf("Görev alındı: Agent '%s', Endpoint: '%s'", agent.Name, agent.Endpoint)
-	agentReq, err := http.NewRequestWithContext(ctx, "POST", agent.Endpoint, bytes.NewBuffer(task.Arguments))
+	// Tam hedef URL (Örn: http://localhost:8081 + /create_event)
+	targetURL := agent.Endpoint + functionDef.APIPath
+
+	log.Printf("Görev alındı: Agent '%s', Func '%s', URL: '%s'", agent.Name, task.FunctionName, targetURL)
+
+	// İsteği oluştur
+	agentReq, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewBuffer(task.Arguments))
 	agentReq.Header.Set("Content-Type", "application/json")
 
 	agentResp, err := o.HttpClient.Do(agentReq)
@@ -64,7 +71,7 @@ func (o *Orchestrator) HandleTask(w http.ResponseWriter, r *http.Request) {
 	}
 	defer agentResp.Body.Close()
 
-	if agentResp.StatusCode == http.StatusAccepted {
+	if agentResp.StatusCode == http.StatusAccepted || agentResp.StatusCode == http.StatusOK {
 		var startResp models.TaskStartResponse
 
 		if err := json.NewDecoder(agentResp.Body).Decode(&startResp); err != nil {
@@ -101,7 +108,7 @@ func (o *Orchestrator) HandleTaskStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	taskID := strings.TrimPrefix(r.URL.Path, "/task_status/")
+	taskID := filepath.Base(r.URL.Path)
 	if taskID == "" {
 		http.Error(w, "Task ID eksik", http.StatusBadRequest)
 		return

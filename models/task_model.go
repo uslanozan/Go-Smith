@@ -8,8 +8,9 @@ import (
 
 // LLM'den Orchestrator'a gelecek olan JSON isteğinin formatıdır.
 type OrchestratorTaskRequest struct {
-	AgentName string          `json:"agent_name"`
-	Arguments json.RawMessage `json:"arguments"`
+	AgentName    string          `json:"agent_name,omitempty"`
+	FunctionName string          `json:"function_name"` // 🔥 YENİ EKLENDİ
+	Arguments    json.RawMessage `json:"arguments"`
 }
 
 // --------- ASENKRON GÖREVLER İÇİN ---------

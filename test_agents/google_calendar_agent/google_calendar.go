@@ -117,11 +117,15 @@ func (a *CalendarAgent) handleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := bodyMap["agent_name"]; !ok {
-		// Gelen veriyi "arguments" içine taşıyoruz
+	_, hasFunc := bodyMap["function_name"]
+	_, hasArgs := bodyMap["arguments"]
+
+	if !hasFunc || !hasArgs {
+		// Eğer bu alanlar yoksa, isteği OrchestratorTaskRequest formatına sok
 		newBody := map[string]interface{}{
-			"agent_name": "create_calendar_event", // Adını biz koyalım
-			"arguments":  bodyMap,                 // Gelen her şeyi argüman say
+			"function_name": "create_calendar_event",
+			"agent_name":    "google_calendar_agent", // Şema hala istiyorsa boş kalmasın
+			"arguments":     bodyMap,
 		}
 		bodyMap = newBody
 	}
