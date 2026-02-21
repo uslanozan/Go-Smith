@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -32,34 +32,30 @@ type CalendarAgent struct {
 
 func loadSchemas() (*gojsonschema.Schema, *gojsonschema.Schema) {
 	cwd, _ := os.Getwd()
-
 	rawPath := filepath.Join(cwd, "..", "..", "schemas", "task_schema.json")
-
 	absPath, err := filepath.Abs(rawPath)
 	if err != nil {
-		log.Fatalf("Dosya yolu çözümlenemedi: %v", err)
+		log.Fatalf("❌ Dosya yolu çözümlenemedi: %v", err)
 	}
 
 	absPath = filepath.ToSlash(absPath)
-
 	if !strings.HasPrefix(absPath, "/") {
 		absPath = "/" + absPath
 	}
-
 	schemaURI := "file://" + absPath
 
-	log.Printf("📂 Yüklenen Şema Yolu: %s", schemaURI)
+	log.Printf("📂 Şema Yükleniyor: %s", schemaURI)
 
 	reqLoader := gojsonschema.NewReferenceLoader(schemaURI + "#/$defs/OrchestratorTaskRequest")
 	reqSchema, err := gojsonschema.NewSchema(reqLoader)
 	if err != nil {
-		log.Fatalf("Request Schema yüklenemedi: %v", err)
+		log.Fatalf("❌ Request Schema yüklenemedi: %v", err)
 	}
 
 	resLoader := gojsonschema.NewReferenceLoader(schemaURI + "#/$defs/TaskStatusResponse")
 	resSchema, err := gojsonschema.NewSchema(resLoader)
 	if err != nil {
-		log.Fatalf("Response Schema yüklenemedi: %v", err)
+		log.Fatalf("❌ Response Schema yüklenemedi: %v", err)
 	}
 
 	return reqSchema, resSchema
@@ -71,23 +67,23 @@ func initCalendarService() *calendar.Service {
 
 	b, err := os.ReadFile("../../secrets/calendar_api.json")
 	if err != nil {
-		log.Fatalf("Secret okunamadı (secrets/calendar_api.json): %v", err)
+		log.Fatalf("❌ Secret okunamadı: %v", err)
 	}
 
 	config, err := google.JWTConfigFromJSON(b, calendar.CalendarScope)
 	if err != nil {
-		log.Fatalf("JWT hatası: %v", err)
+		log.Fatalf("❌ JWT hatası: %v", err)
 	}
 	srv, err := calendar.NewService(ctx, option.WithHTTPClient(config.Client(ctx)))
 	if err != nil {
-		log.Fatalf("Service hatası: %v", err)
+		log.Fatalf("❌ Google Calendar Service hatası: %v", err)
 	}
 	return srv
 }
 
 func main() {
 	reqSchema, resSchema := loadSchemas()
-	log.Println("✅ task_schema.json başarıyla yüklendi ve parse edildi.")
+	log.Println("✅ task_schema.json başarıyla yüklendi.")
 
 	srv := initCalendarService()
 
@@ -104,7 +100,7 @@ func main() {
 	mux.HandleFunc("/task_status/", agent.handleStatus)
 	mux.HandleFunc("/task_stop/", agent.handleStop)
 
-	log.Println("🚀 Calendar Agent (Dynamic Schema) 8082 portunda çalışıyor...")
+	log.Println("🚀 Calendar Agent 8082 portunda dinliyor...")
 	if err := http.ListenAndServe(":8082", mux); err != nil {
 		log.Fatal(err)
 	}
@@ -113,69 +109,81 @@ func main() {
 func (a *CalendarAgent) handleExecute(w http.ResponseWriter, r *http.Request) {
 	var bodyMap map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&bodyMap); err != nil {
+		log.Printf("❌ JSON Decode Hatası: %v", err)
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
+
+	// 📥 GELEN HAM VERİYİ LOGLA
+	rawJSON, _ := json.Marshal(bodyMap)
+	log.Printf("📩 Yeni İstek Geldi: %s", string(rawJSON))
 
 	_, hasFunc := bodyMap["function_name"]
 	_, hasArgs := bodyMap["arguments"]
 
 	if !hasFunc || !hasArgs {
-		// Eğer bu alanlar yoksa, isteği OrchestratorTaskRequest formatına sok
+		log.Println("⚠️  Eksik alanlar tespit edildi, paket simüle ediliyor (wrapping)...")
 		newBody := map[string]interface{}{
 			"function_name": "create_calendar_event",
-			"agent_name":    "google_calendar_agent", // Şema hala istiyorsa boş kalmasın
+			"agent_name":    "google_calendar_agent",
 			"arguments":     bodyMap,
 		}
 		bodyMap = newBody
 	}
 
+	// 🔍 ŞEMA DOĞRULAMA
 	loader := gojsonschema.NewGoLoader(bodyMap)
 	result, err := a.requestSchema.Validate(loader)
 	if err != nil {
-		http.Error(w, "Validation Internal Error: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("❌ Validasyon Hatası: %v", err)
+		http.Error(w, "Validation Internal Error", http.StatusInternalServerError)
 		return
 	}
 
 	if !result.Valid() {
-		var sb strings.Builder
-		for _, desc := range result.Errors() {
-			sb.WriteString(fmt.Sprintf("- %s\n", desc))
-		}
-		http.Error(w, "Schema Validation Failed:\n"+sb.String(), http.StatusBadRequest)
+		log.Printf("❌ Şema Doğrulanamadı: %v", result.Errors())
+		http.Error(w, "Schema Validation Failed", http.StatusBadRequest)
 		return
 	}
 
+	// 📍 PARAMETRELERİ AYRIŞTIR VE LOGLA
 	args := bodyMap["arguments"].(map[string]interface{})
-
 	summary, _ := args["summary"].(string)
 	startTime, _ := args["start_time"].(string)
 	endTime, _ := args["end_time"].(string)
 
+	if endTime == "" && startTime != "" {
+		// ISO 8601 formatını parse et (time.RFC3339)
+		t, err := time.Parse(time.RFC3339, startTime)
+		if err == nil {
+			endTime = t.Add(time.Hour).Format(time.RFC3339)
+			log.Printf("⚠️  Bitiş zamanı boş, otomatik +1 saat eklendi: %s", endTime)
+		} else {
+			log.Printf("❌ Başlangıç zamanı parse edilemedi: %v", err)
+		}
+	}
+
+	log.Printf("🧩 Ayrıştırılan Parametreler: Summary='%s', Start='%s', End='%s'", summary, startTime, endTime)
+
 	taskID := uuid.NewString()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	initialState := map[string]interface{}{
-		"task_id": taskID,
-		"status":  "pending",
-	}
-
 	a.tasksMu.Lock()
-	a.tasks[taskID] = initialState
+	a.tasks[taskID] = map[string]interface{}{"task_id": taskID, "status": "pending"}
 	a.cancelFuncs[taskID] = cancel
 	a.tasksMu.Unlock()
+
+	log.Printf("📝 Görev Kaydedildi: TaskID=%s", taskID)
 
 	go a.runTask(ctx, taskID, summary, startTime, endTime)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"task_id": taskID,
-		"status":  "pending",
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{"task_id": taskID, "status": "pending"})
 }
 
 func (a *CalendarAgent) runTask(ctx context.Context, taskID, summary, start, end string) {
 	a.updateStatus(taskID, "running", nil, nil)
+	log.Printf("⚙️  Görev Başlatılıyor (TaskID: %s)...", taskID)
 
 	event := &calendar.Event{
 		Summary: summary,
@@ -188,15 +196,16 @@ func (a *CalendarAgent) runTask(ctx context.Context, taskID, summary, start, end
 		calendarId = "primary"
 	}
 
+	log.Printf("📅 Google Calendar'a Gönderiliyor: %s (%s - %s)", summary, start, end)
+
 	createdEvent, err := a.calSrv.Events.Insert(calendarId, event).Context(ctx).Do()
 
 	if err != nil {
 		errStr := err.Error()
-		if err == context.Canceled {
-			errStr = "Task canceled"
-		}
+		log.Printf("❌ API Hatası (TaskID: %s): %v", taskID, errStr)
 		a.updateStatus(taskID, "failed", nil, &errStr)
 	} else {
+		log.Printf("✅ Başarılı! (TaskID: %s). Link: %s", taskID, createdEvent.HtmlLink)
 		res := map[string]string{"htmlLink": createdEvent.HtmlLink}
 		a.updateStatus(taskID, "completed", res, nil)
 	}
@@ -217,17 +226,16 @@ func (a *CalendarAgent) updateStatus(taskID, status string, result interface{}, 
 		statusObj["error"] = *errStr
 	}
 
-	loader := gojsonschema.NewGoLoader(statusObj)
-	res, _ := a.responseSchema.Validate(loader)
-	if !res.Valid() {
-		log.Printf("⚠️  DIKKAT: Agent hatalı JSON üretiyor (Task: %s): %v", taskID, res.Errors())
-	}
+	// Durum değişikliğini logla
+	log.Printf("🔄 Durum Güncellendi [%s]: %s", taskID, status)
 
 	a.tasks[taskID] = statusObj
 }
 
+// handleStatus ve handleStop kısımları aynı kalabilir...
 func (a *CalendarAgent) handleStatus(w http.ResponseWriter, r *http.Request) {
 	taskID := strings.TrimPrefix(r.URL.Path, "/task_status/")
+	log.Printf("📡 Durum Sorgusu: %s", taskID)
 
 	a.tasksMu.RLock()
 	task, ok := a.tasks[taskID]
@@ -244,6 +252,7 @@ func (a *CalendarAgent) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (a *CalendarAgent) handleStop(w http.ResponseWriter, r *http.Request) {
 	taskID := strings.TrimPrefix(r.URL.Path, "/task_stop/")
+	log.Printf("🛑 Durdurma İsteği: %s", taskID)
 
 	a.tasksMu.Lock()
 	cancel, ok := a.cancelFuncs[taskID]
